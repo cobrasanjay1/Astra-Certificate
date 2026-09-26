@@ -6,7 +6,7 @@ Takes the certificate template PNG and overlays participant-specific data:
   - Body paragraph (college, event, fest, date)
 
 Usage:
-    python generate.py --event-id 1
+    python generate.py --event-id "Cypher Decode"
     python generate.py --data-file ../data/attendees.json
     python generate.py --test  # Generate a single test certificate
 """
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     TEMPLATE_FILE, OUTPUT_DIR, DATA_DIR, FONT_DIR, SITE_DIR,
     FONTS, FALLBACK_FONTS, TEXT_REGIONS, BODY_TEMPLATE,
-    TEMPLATE_WIDTH, TEMPLATE_HEIGHT, CERT_ID_PREFIX,
+    TEMPLATE_WIDTH, TEMPLATE_HEIGHT, CERT_ID_PREFIX, safe_id,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -511,7 +511,7 @@ def generate_test():
 
 def main():
     parser = argparse.ArgumentParser(description="Astra Certificate Generator")
-    parser.add_argument("--event-id", type=int, help="Event ID from the database")
+    parser.add_argument("--event-id", help="Event title (or its saved identifier) from fetch_attendees.py")
     parser.add_argument("--data-file", help="Path to attendees JSON file")
     parser.add_argument("--all-events", action="store_true", help="Generate certificates for ALL events")
     parser.add_argument("--test", action="store_true", help="Generate a test certificate")
@@ -520,7 +520,8 @@ def main():
     if args.test:
         generate_test()
     elif args.event_id or args.data_file:
-        generate_batch(data_file=args.data_file, event_id=args.event_id)
+        event_id = safe_id(args.event_id) if args.event_id else None
+        generate_batch(data_file=args.data_file, event_id=event_id)
     else:
         generate_all_events()
 

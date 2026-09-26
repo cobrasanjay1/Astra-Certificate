@@ -142,11 +142,20 @@ BODY_TEMPLATE = (
 # ── Database & Supabase Configuration ─────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-DATABASE_URL = os.environ.get("DATABASE_URL", os.environ.get("SUPABASE_DB_URL", ""))
 
-# Legacy API config (fallback)
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.astraietm.in")
-API_TOKEN = os.environ.get("API_TOKEN", "")
+# The fest date/name are the same across every event in a run, and aren't
+# stored per-registration — set them once here (or via env vars) rather
+# than per participant.
+FEST_NAME = os.environ.get("FEST_NAME", "ZERO DAY")
+EVENT_DATE_STR = os.environ.get("EVENT_DATE_STR", "")  # e.g. "6 OCTOBER 2026"
+
+
+def safe_id(value):
+    """Turn an event title into a filesystem-safe identifier used in filenames
+    (data/event_{id}_attendees.json, etc). Used consistently by
+    fetch_attendees.py, generate.py, send_emails.py and build_site.py so a
+    title-based identifier round-trips through every stage of the pipeline."""
+    return (value or "event").strip().replace("/", "-")
 
 # ── Email Configuration ───────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")

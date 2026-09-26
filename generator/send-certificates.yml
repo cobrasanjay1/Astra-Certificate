@@ -1,0 +1,171 @@
+name: 🎓 Send Certificates
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_title:
+        description: 'Event title (must match exactly; leave blank to send to ALL participants of ALL events)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run — generate certs & queue, but don''t send emails'
+        required: false
+        default: true
+        type: boolean
+      retry_failed:
+        description: 'Retry only previously failed emails'
+        required: false
+        default: false
+        type: boolean
+      max_retries:
+        description: 'Max send attempts per email'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: generator/requirements.txt
+
+      - name: 📦 Install dependencies
+        run: pip install -r generator/requirements.txt
+
+      # ── Restore queue from previous runs (for resume/retry) ──────────
+      - name: 📂 Restore queue cache
+        if: ${{ inputs.retry_failed || inputs.dry_run == false }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: cert-queue-${{ inputs.event_title || 'all' }}
+
+      # ── Fetch attendees from Supabase ─────────────────────────────────
+      - name: 🔍 Fetch attendees from Supabase
+        if: ${{ !inputs.retry_failed }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          if [ -n "${{ inputs.event_title }}" ]; then
+            python generator/fetch_attendees.py --title "${{ inputs.event_title }}" $ARGS
+          else
+            python generator/fetch_attendees.py $ARGS
+          fi
+
+
+      # ── Generate certificate images ──────────────────────────────────
+      - name: 🎨 Generate certificates
+        if: ${{ !inputs.retry_failed }}
+        run: |
+          if [ -n "${{ inputs.event_title }}" ]; then
+            python generator/generate.py --event-id "${{ inputs.event_title }}"
+          else
+            python generator/generate.py --all-events
+          fi
+
+      # ── Build verification site ──────────────────────────────────────
+      - name: 🌐 Build verification site
+        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+        run: |
+          if [ -n "${{ inputs.event_title }}" ]; then
+            python generator/build_site.py --event-id "${{ inputs.event_title }}"
+          else
+            python generator/build_site.py --all-events
+          fi
+
+      # ── Deploy verification site to GitHub Pages ─────────────────────
+      - name: 🚀 Deploy to GitHub Pages
+        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          cname: cert.astraietm.in
+          keep_files: true  # Don't delete certs from previous events
+
+      # ── Send emails (with queue + retry) ─────────────────────────────
+      - name: 📧 Send certificate emails
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          # Bash array (not a plain string) so an event title containing
+          # spaces still comes through as a single argument.
+          ARGS=(--max-retries "${{ inputs.max_retries }}")
+
+          if [ -n "${{ inputs.event_title }}" ]; then
+            ARGS+=(--event-id "${{ inputs.event_title }}")
+            QFILE="data/event_${{ inputs.event_title }}_queue.json"
+          else
+            ARGS+=(--all-events)
+            QFILE="data/all_queue.json"
+          fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          if [ "${{ inputs.retry_failed }}" = "true" ]; then
+            ARGS+=(--retry-failed)
+          elif [ -f "$QFILE" ]; then
+            ARGS+=(--resume)
+          fi
+
+          python generator/send_emails.py "${ARGS[@]}"
+
+      # ── Save queue state for future runs ─────────────────────────────
+      - name: 💾 Cache queue state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/
+          key: cert-queue-${{ inputs.event_title || 'all' }}-${{ github.run_number }}
+
+      # ── Show queue status ────────────────────────────────────────────
+      - name: 📊 Print queue summary
+        if: always()
+        run: |
+          if [ -n "${{ inputs.event_title }}" ]; then
+            python generator/send_emails.py --event-id "${{ inputs.event_title }}" --status
+          else
+            python generator/send_emails.py --all-events --status
+          fi
+
+      # ── Upload certificates as artifacts ─────────────────────────────
+      - name: 📤 Upload certificates
+        if: ${{ !inputs.retry_failed }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificates-${{ inputs.event_title || 'all-events' }}
+          path: output/
+          retention-days: 90
+
+      # ── Upload queue log as artifact ─────────────────────────────────
+      - name: 📤 Upload queue log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-log-${{ inputs.event_title || 'all' }}-run-${{ github.run_number }}
+          path: data/
+          retention-days: 30

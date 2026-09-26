@@ -7,7 +7,7 @@ Generates:
   - Copies certificate PNGs to the site directory
 
 Usage:
-    python build_site.py --event-id 1
+    python build_site.py --event-id "Cypher Decode"
     python build_site.py --manifest ../data/event_1_manifest.json
 """
 
@@ -20,7 +20,7 @@ import logging
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import DATA_DIR, OUTPUT_DIR, SITE_DIR
+from config import DATA_DIR, OUTPUT_DIR, SITE_DIR, safe_id
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("site-builder")
@@ -569,7 +569,7 @@ def build_all_site():
 
 def main():
     parser = argparse.ArgumentParser(description="Build the certificate verification site")
-    parser.add_argument("--event-id", type=int, help="Event ID")
+    parser.add_argument("--event-id", help="Event title (or its saved identifier)")
     parser.add_argument("--manifest", help="Path to manifest JSON")
     parser.add_argument("--all-events", action="store_true", help="Build site for ALL events")
     args = parser.parse_args()
@@ -578,7 +578,7 @@ def main():
         build_site(args.manifest)
     elif args.event_id and not args.all_events:
         manifest_path = os.path.join(
-            DATA_DIR, f"event_{args.event_id}_manifest.json"
+            DATA_DIR, f"event_{safe_id(args.event_id)}_manifest.json"
         )
         build_site(manifest_path)
     else:

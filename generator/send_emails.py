@@ -10,11 +10,11 @@ Features:
   - Detailed summary report at the end
 
 Usage:
-    python send_emails.py --event-id 1                    # First run
-    python send_emails.py --event-id 1 --resume           # Resume after crash
-    python send_emails.py --event-id 1 --retry-failed     # Retry failures
-    python send_emails.py --event-id 1 --dry-run          # Test without sending
-    python send_emails.py --event-id 1 --max-retries 5    # Custom retry limit
+    python send_emails.py --event-id "Cypher Decode"                  # First run
+    python send_emails.py --event-id "Cypher Decode" --resume         # Resume after crash
+    python send_emails.py --event-id "Cypher Decode" --retry-failed   # Retry failures
+    python send_emails.py --event-id "Cypher Decode" --dry-run        # Test without sending
+    python send_emails.py --event-id "Cypher Decode" --max-retries 5  # Custom retry limit
 """
 
 import os
@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     RESEND_API_KEY, FROM_EMAIL, CERT_VERIFY_BASE_URL,
-    DATA_DIR, OUTPUT_DIR,
+    DATA_DIR, OUTPUT_DIR, safe_id,
 )
 
 logging.basicConfig(
@@ -477,7 +477,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Send certificate emails with queue and retry support"
     )
-    parser.add_argument("--event-id", type=int, help="Event ID (looks for manifest in data/)")
+    parser.add_argument("--event-id", help="Event title (or its saved identifier) — looks for manifest in data/")
     parser.add_argument("--manifest", help="Path to manifest JSON")
     parser.add_argument("--all-events", action="store_true", help="Send emails for ALL events")
     parser.add_argument("--dry-run", action="store_true", help="Log without sending emails")
@@ -502,8 +502,9 @@ def main():
 
     # Determine paths
     if args.event_id and not args.all_events:
-        manifest_path = os.path.join(DATA_DIR, f"event_{args.event_id}_manifest.json")
-        queue_file = os.path.join(DATA_DIR, f"event_{args.event_id}_queue.json")
+        event_id = safe_id(args.event_id)
+        manifest_path = os.path.join(DATA_DIR, f"event_{event_id}_manifest.json")
+        queue_file = os.path.join(DATA_DIR, f"event_{event_id}_queue.json")
     elif args.manifest:
         manifest_path = args.manifest
         queue_file = args.manifest.replace("_manifest.json", "_queue.json")
