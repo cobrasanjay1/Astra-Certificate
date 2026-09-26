@@ -72,11 +72,11 @@ EVENT_ID_COL = "id"
 EVENT_TITLE_COL = "title"
 EVENT_DATE_COL = "event_date"
 
-# The DB currently stores attendance in events_registration.status.
-# Keep this configurable in case the application uses another value.
+# Attendance is recorded by changing events_registration.status from
+# REGISTERED to ATTENDED.
 ATTENDED_STATUSES = {
     value.strip().lower()
-    for value in os.environ.get("ATTENDED_STATUSES", "attended").split(",")
+    for value in os.environ.get("ATTENDED_STATUSES", "ATTENDED").split(",")
     if value.strip()
 }
 
@@ -174,10 +174,14 @@ def fetch_attended_registrations(client, event_id=None):
     event_id is optional. If supplied, only registrations for that event
     are considered.
     """
-    # Attendance is recorded by the event check-in system in is_used.
-    # A used registration token means the participant actually checked in.
+    # Attendance is recorded by changing status from REGISTERED to ATTENDED.
+    # Use the configured values in the query, then normalize again in Python.
+    status_values = sorted({
+        value.upper()
+        for value in ATTENDED_STATUSES
+    })
     filters = {
-        REG_ATTENDED_COL: True,
+        REG_STATUS_COL: ("in", status_values),
     }
 
     if event_id is not None:
@@ -196,9 +200,12 @@ def fetch_attended_registrations(client, event_id=None):
         filters=filters,
     )
 
-    # Keep only checked-in registrations. The status column describes the
-    # registration/payment lifecycle, while is_used records QR attendance.
-    rows = [row for row in rows if row.get(REG_ATTENDED_COL) is True]
+    # Normalize status in Python so ATTENDED/Attended/attended are equivalent.
+    rows = [
+        row
+        for row in rows
+        if str(row.get(REG_STATUS_COL, "")).strip().lower() in ATTENDED_STATUSES
+    ]
 
     return rows
 
@@ -331,7 +338,10 @@ def fetch_all(event_id=None, title=None, supabase_url=None, supabase_key=None):
 
     logger.info("🔍 Fetching attended registrations from Supabase")
     logger.info("   Tables: %s, %s, %s", REGISTRATIONS_TABLE, USERS_TABLE, EVENTS_TABLE)
-    logger.info("   Attendance source: events_registration.is_used = true")
+    logger.info(
+        "   Attendance source: events_registration.status in %s",
+        ", ".join(sorted(ATTENDED_STATUSES)),
+    )
 
     registrations = fetch_attended_registrations(client, event_id=event_id)
 
@@ -552,7 +562,7 @@ def main():
 
     logger.error(
         "❌ No attended participants found for %s. "
-        "Check events_registration.is_used and the Supabase credentials.",
+        "Check events_registration.status and the Supabase credentials.",
         scope,
     )
     sys.exit(1)
