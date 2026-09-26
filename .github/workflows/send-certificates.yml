@@ -1,0 +1,134 @@
+name: 🎓 Send Certificates
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'Event ID from the database'
+        required: true
+        type: number
+      dry_run:
+        description: 'Dry run — generate certs & queue, but don''t send emails'
+        required: false
+        default: true
+        type: boolean
+      retry_failed:
+        description: 'Retry only previously failed emails'
+        required: false
+        default: false
+        type: boolean
+      max_retries:
+        description: 'Max send attempts per email'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: generator/requirements.txt
+
+      - name: 📦 Install dependencies
+        run: pip install -r generator/requirements.txt
+
+      # ── Restore queue from previous runs (for resume/retry) ──────────
+      - name: 📂 Restore queue cache
+        if: ${{ inputs.retry_failed || inputs.dry_run == false }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: cert-queue-event-${{ inputs.event_id }}
+
+      # ── Fetch attendees from API ─────────────────────────────────────
+      - name: 🔍 Fetch attendees from DB
+        if: ${{ !inputs.retry_failed }}
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: python generator/fetch_attendees.py --event-id ${{ inputs.event_id }}
+
+      # ── Generate certificate images ──────────────────────────────────
+      - name: 🎨 Generate certificates
+        if: ${{ !inputs.retry_failed }}
+        run: python generator/generate.py --event-id ${{ inputs.event_id }}
+
+      # ── Build verification site ──────────────────────────────────────
+      - name: 🌐 Build verification site
+        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+        run: python generator/build_site.py --event-id ${{ inputs.event_id }}
+
+      # ── Deploy verification site to GitHub Pages ─────────────────────
+      - name: 🚀 Deploy to GitHub Pages
+        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          cname: cert.astraietm.in
+          keep_files: true  # Don't delete certs from previous events
+
+      # ── Send emails (with queue + retry) ─────────────────────────────
+      - name: 📧 Send certificate emails
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          ARGS="--event-id ${{ inputs.event_id }} --max-retries ${{ inputs.max_retries }}"
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          if [ "${{ inputs.retry_failed }}" = "true" ]; then
+            ARGS="$ARGS --retry-failed"
+          elif [ -f "data/event_${{ inputs.event_id }}_queue.json" ]; then
+            ARGS="$ARGS --resume"
+          fi
+
+          python generator/send_emails.py $ARGS
+
+      # ── Save queue state for future runs ─────────────────────────────
+      - name: 💾 Cache queue state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/
+          key: cert-queue-event-${{ inputs.event_id }}-${{ github.run_number }}
+
+      # ── Show queue status ────────────────────────────────────────────
+      - name: 📊 Print queue summary
+        if: always()
+        run: python generator/send_emails.py --event-id ${{ inputs.event_id }} --status
+
+      # ── Upload certificates as artifacts ─────────────────────────────
+      - name: 📤 Upload certificates
+        if: ${{ !inputs.retry_failed }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificates-event-${{ inputs.event_id }}
+          path: output/
+          retention-days: 90
+
+      # ── Upload queue log as artifact ─────────────────────────────────
+      - name: 📤 Upload queue log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-log-event-${{ inputs.event_id }}-run-${{ github.run_number }}
+          path: data/event_${{ inputs.event_id }}_queue.json
+          retention-days: 30

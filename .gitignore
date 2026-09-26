@@ -1,0 +1,29 @@
+# Generated certificates
+output/
+!output/.gitkeep
+
+# Fetched data and queue state
+data/
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated site (built by Actions)
+site/verify/
+site/certificates/
+site/CNAME
+site/.nojekyll
+site/404.html

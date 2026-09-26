@@ -1,0 +1,141 @@
+# 🎓 Astra Certificate Distribution System
+
+Automated certificate generation & email distribution for **ASTRA IETM** events.
+
+## How It Works
+
+```
+Event Ends → Admin Triggers GitHub Action → Certificates Generated → Emails Sent
+                                              ↓
+                                    Verification Site Deployed
+                                    (cert.astraietm.in)
+```
+
+1. **Event ends** → Admin marks participants as `ATTENDED` in the database
+2. **Admin triggers** the GitHub Action (`workflow_dispatch`) with the event ID
+3. **Action fetches** attendees from the API, generates personalized certificates
+4. **Verification site** deployed to `cert.astraietm.in` via GitHub Pages
+5. **Emails sent** via Resend with certificate PNG attached + verify link
+
+## Quick Start (Local Testing)
+
+```bash
+# Install dependencies
+pip install -r generator/requirements.txt
+
+# Generate sample data (no API needed)
+python3 generator/fetch_attendees.py --event-id 1 --sample
+
+# Generate certificates
+python3 generator/generate.py --event-id 1
+
+# Build verification site
+python3 generator/build_site.py --event-id 1
+
+# Dry-run emails (doesn't actually send)
+python3 generator/send_emails.py --event-id 1 --dry-run
+
+# Check queue status
+python3 generator/send_emails.py --event-id 1 --status
+```
+
+## Email Queue & Retry
+
+The email sender uses a **persistent file-based queue** that survives crashes:
+
+```bash
+# First run — sends all emails
+python3 generator/send_emails.py --event-id 1
+
+# Resume after crash/timeout
+python3 generator/send_emails.py --event-id 1 --resume
+
+# Retry only failed emails
+python3 generator/send_emails.py --event-id 1 --retry-failed
+
+# Custom max retries + delay
+python3 generator/send_emails.py --event-id 1 --max-retries 5 --delay 1.0
+```
+
+Queue state is saved to `data/event_{id}_queue.json` after every operation.
+
+## GitHub Action
+
+Trigger from the **Actions** tab → **Send Certificates** → **Run workflow**:
+
+| Input | Description |
+|-------|-------------|
+| `event_id` | Event ID from your database |
+| `dry_run` | Generate without sending emails |
+| `retry_failed` | Retry only previously failed emails |
+| `max_retries` | Max send attempts per email (default: 3) |
+
+### Required Secrets
+
+| Secret | Description |
+|--------|-------------|
+| `API_BASE_URL` | Your API URL (e.g., `https://api.astraietm.in`) |
+| `API_TOKEN` | JWT token for a staff user |
+| `RESEND_API_KEY` | Resend API key for sending emails |
+
+## DNS Setup
+
+Add a CNAME record for `cert.astraietm.in`:
+
+```
+Type:  CNAME
+Name:  cert
+Value: <your-github-username>.github.io
+TTL:   Auto
+```
+
+## Project Structure
+
+```
+Astra-Certificate/
+├── .github/workflows/
+│   └── send-certificates.yml    # GitHub Actions workflow
+├── generator/
+│   ├── config.py                # Configuration (positions, fonts, API)
+│   ├── generate.py              # Certificate image generator (Pillow)
+│   ├── fetch_attendees.py       # Fetch attendees from API
+│   ├── send_emails.py           # Email queue with retry logic
+│   ├── build_site.py            # Verification site builder
+│   ├── requirements.txt         # Python dependencies
+│   └── fonts/                   # Downloaded Google Fonts
+├── templates/
+│   └── astra_certificate_template.png
+├── site/                        # Generated verification site
+│   └── index.html               # Landing page
+├── output/                      # Generated certificates
+└── data/                        # Fetched data & queue state
+```
+
+## Certificate Template
+
+The generator overlays dynamic text onto the template image at these regions:
+- **Participant Name** — below "AWARDED TO" label
+- **Body Paragraph** — college, event, fest, date
+
+To use a blank template (recommended), remove the sample text and save as
+`templates/astra_certificate_template.png`.
+
+## API Endpoint
+
+The backend exposes a staff-only endpoint:
+
+```
+GET /api/certificates/attendees/?event_id=<id>
+Authorization: Bearer <staff-jwt-token>
+```
+
+Returns:
+```json
+{
+  "event": { "id": 1, "title": "Cypher Decode", "date_str": "6 OCTOBER 2026" },
+  "attendees": [
+    { "full_name": "Jane Doe", "email": "jane@example.com", "college": "..." }
+  ],
+  "count": 42
+}
+```

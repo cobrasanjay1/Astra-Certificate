@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Certificate Verification | ASTRA IETM</title>
+  <meta name="description" content="Verify ASTRA IETM event certificates online. Enter your certificate ID to check authenticity.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f172a;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: #e2e8f0;
+    }
+
+    .bg-pattern {
+      position: fixed; inset: 0; z-index: 0;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(59,130,246,0.1) 0%, transparent 50%),
+        radial-gradient(circle at 70% 70%, rgba(250,204,21,0.06) 0%, transparent 50%);
+    }
+
+    .container {
+      position: relative; z-index: 1;
+      max-width: 520px; width: 100%;
+      padding: 40px 24px; text-align: center;
+    }
+
+    .logo {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: rgba(250,204,21,0.1);
+      border: 1px solid rgba(250,204,21,0.2);
+      border-radius: 10px; padding: 8px 20px;
+      margin-bottom: 32px;
+    }
+    .logo .a-box {
+      background: #facc15; color: #0f172a;
+      font-weight: 800; font-size: 18px;
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 6px;
+    }
+    .logo span {
+      color: #facc15; font-size: 14px; font-weight: 700;
+      letter-spacing: 2px;
+    }
+
+    h1 {
+      font-size: 36px; font-weight: 800; color: #f8fafc;
+      margin-bottom: 12px;
+      background: linear-gradient(135deg, #f8fafc, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle { color: #64748b; font-size: 15px; margin-bottom: 40px; line-height: 1.6; }
+
+    .search-box {
+      background: rgba(30, 41, 59, 0.8);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 16px; padding: 28px;
+      text-align: left;
+    }
+    .search-box label {
+      display: block; font-size: 13px; font-weight: 600;
+      color: #94a3b8; margin-bottom: 10px;
+      text-transform: uppercase; letter-spacing: 1px;
+    }
+    .input-row { display: flex; gap: 10px; }
+    .search-box input {
+      flex: 1; padding: 14px 16px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 10px; color: #e2e8f0;
+      font-size: 16px; font-family: 'JetBrains Mono', monospace;
+      outline: none; transition: border-color 0.2s;
+    }
+    .search-box input:focus {
+      border-color: #3b82f6;
+    }
+    .search-box input::placeholder { color: #475569; }
+    .search-box button {
+      padding: 14px 24px;
+      background: linear-gradient(135deg, #1e40af, #3b82f6);
+      color: white; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: transform 0.1s, box-shadow 0.2s;
+      white-space: nowrap;
+    }
+    .search-box button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4);
+    }
+
+    .error-msg {
+      margin-top: 14px; padding: 10px 14px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 8px; color: #fca5a5;
+      font-size: 13px; display: none;
+    }
+
+    .footer {
+      margin-top: 48px; color: #334155; font-size: 12px; line-height: 1.6;
+    }
+    .footer a { color: #3b82f6; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="bg-pattern"></div>
+  <div class="container">
+
+    <div class="logo">
+      <div class="a-box">A</div>
+      <span>ASTRA IETM</span>
+    </div>
+
+    <h1>Certificate Verification</h1>
+    <p class="subtitle">
+      Enter your certificate ID to verify its authenticity.<br>
+      Certificate IDs look like: <strong style="color:#60a5fa;">CERT-2026-0042</strong>
+    </p>
+
+    <div class="search-box">
+      <label for="cert-id">Certificate ID</label>
+      <div class="input-row">
+        <input type="text" id="cert-id" placeholder="CERT-2026-XXXX"
+               autocomplete="off" spellcheck="false">
+        <button onclick="verifyCert()">Verify</button>
+      </div>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+
+    <div class="footer">
+      <p>
+        © 2026 ASTRA IETM · KMCT Institute of Emerging Technology and Management<br>
+        <a href="https://astraietm.in">astraietm.in</a>
+      </p>
+    </div>
+
+  </div>
+
+  <script>
+    function verifyCert() {
+      const input = document.getElementById('cert-id');
+      const errEl = document.getElementById('error-msg');
+      const certId = input.value.trim().toUpperCase();
+
+      errEl.style.display = 'none';
+
+      if (!certId) {
+        errEl.textContent = 'Please enter a certificate ID.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Navigate to the verify page
+      window.location.href = `/verify/${certId}/`;
+    }
+
+    // Enter key support
+    document.getElementById('cert-id').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') verifyCert();
+    });
+  </script>
+</body>
+</html>
