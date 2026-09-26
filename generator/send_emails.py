@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     RESEND_API_KEY, FROM_EMAIL, CERT_VERIFY_BASE_URL,
+    SUPABASE_URL, SUPABASE_KEY,
     DATA_DIR, OUTPUT_DIR, safe_id,
 )
 
@@ -45,6 +46,37 @@ STATUS_PENDING = "PENDING"
 STATUS_SENDING = "SENDING"
 STATUS_SENT = "SENT"
 STATUS_FAILED = "FAILED"
+
+
+def _fetch_event_title_from_db(event_id):
+    """Fetch the canonical event title from events_event using its DB id."""
+    if not event_id or not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    try:
+        from supabase import create_client
+
+        client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        response = (
+            client.table("events_event")
+            .select("id,title,event_date")
+            .eq("id", event_id)
+            .limit(1)
+            .execute()
+        )
+
+        if response.data:
+            row = response.data[0]
+            title = (row.get("title") or "").strip()
+            if title:
+                return {
+                    "title": title,
+                    "event_date": row.get("event_date", ""),
+                }
+    except Exception as exc:
+        logger.warning("Could not fetch event %s from Supabase: %s", event_id, exc)
+
+    return None
 
 
 # ── Email HTML Builder ────────────────────────────────────────────────────
@@ -455,8 +487,18 @@ def init_queue_from_manifest(manifest_path, queue_file):
         # In an all-events manifest, each certificate keeps its own
         # event title/date. Do not use the top-level "All Events" wrapper.
         cert_event = dict(event)
-        if cert.get("event"):
+
+        # The canonical event title comes from events_event using event_id.
+        # The all-events manifest has "All Events" only as a wrapper title.
+        event_id = cert.get("event_id")
+        db_event = _fetch_event_title_from_db(event_id)
+        if db_event:
+            cert_event["title"] = db_event["title"]
+            cert_event["event_date"] = db_event.get("event_date", "")
+        elif cert.get("event"):
+            # Backward-compatible fallback for older manifests.
             cert_event["title"] = cert["event"]
+
         if cert.get("date"):
             cert_event["date_str"] = cert["date"]
 
