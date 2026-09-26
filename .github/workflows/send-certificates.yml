@@ -4,24 +4,29 @@ on:
   workflow_dispatch:
     inputs:
       event_id:
-        description: 'Event ID from database (leave blank to send to ALL participants of ALL events)'
+        description: "Database event ID from events_event.id. Leave blank for all events."
         required: false
-        default: ''
+        default: ""
         type: string
       dry_run:
-        description: 'Dry run — generate certs & queue, but don''t send emails'
+        description: "Generate certificates and build the queue without sending emails or deploying."
         required: false
         default: true
         type: boolean
       retry_failed:
-        description: 'Retry only previously failed emails'
+        description: "Retry only previously failed certificate emails."
         required: false
         default: false
         type: boolean
       max_retries:
-        description: 'Max send attempts per email'
+        description: "Maximum email attempts per participant."
         required: false
-        default: '3'
+        default: "3"
+        type: string
+      attendance_statuses:
+        description: "Comma-separated events_registration.status values considered attended."
+        required: false
+        default: "attended"
         type: string
 
 permissions:
@@ -41,133 +46,135 @@ jobs:
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: pip
           cache-dependency-path: generator/requirements.txt
 
       - name: 📦 Install dependencies
-        run: pip install -r generator/requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r generator/requirements.txt
 
-      # ── Restore queue from previous runs (for resume/retry) ──────────
-      - name: 📂 Restore queue cache
-        if: ${{ inputs.retry_failed || inputs.dry_run == false }}
+      - name: 📂 Restore previous queue
+        if: ${{ inputs.retry_failed == true }}
         uses: actions/cache/restore@v4
         with:
           path: data/
           key: cert-queue-${{ inputs.event_id || 'all' }}
+          restore-keys: |
+            cert-queue-${{ inputs.event_id || 'all' }}-
 
-      # ── Fetch attendees from DB ──────────────────────────────────────
-      - name: 🔍 Fetch attendees from DB
-        if: ${{ !inputs.retry_failed }}
+      - name: 🔍 Fetch attended participants
+        if: ${{ inputs.retry_failed == false }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          API_TOKEN: ${{ secrets.API_TOKEN }}
+          ATTENDED_STATUSES: ${{ inputs.attendance_statuses }}
+          FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
-          ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
+          set -e
 
           if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/fetch_attendees.py --event-id ${{ inputs.event_id }} $ARGS
+            echo "Fetching attended participants for event ID: ${{ inputs.event_id }}"
+            python generator/fetch_attendees.py --event-id "${{ inputs.event_id }}"
           else
-            python generator/fetch_attendees.py --all-events $ARGS
+            echo "Fetching attended participants for ALL events"
+            python generator/fetch_attendees.py --all-events
           fi
 
-
-      # ── Generate certificate images ──────────────────────────────────
       - name: 🎨 Generate certificates
-        if: ${{ !inputs.retry_failed }}
+        if: ${{ inputs.retry_failed == false }}
+        env:
+          FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
+          set -e
+
           if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/generate.py --event-id ${{ inputs.event_id }}
+            python generator/generate.py --event-id "${{ inputs.event_id }}"
           else
             python generator/generate.py --all-events
           fi
 
-      # ── Build verification site ──────────────────────────────────────
       - name: 🌐 Build verification site
-        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+        if: ${{ inputs.dry_run == false && inputs.retry_failed == false }}
+        env:
+          FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
+          set -e
+
           if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/build_site.py --event-id ${{ inputs.event_id }}
+            python generator/build_site.py --event-id "${{ inputs.event_id }}"
           else
             python generator/build_site.py --all-events
           fi
 
-      # ── Deploy verification site to GitHub Pages ─────────────────────
-      - name: 🚀 Deploy to GitHub Pages
-        if: ${{ !inputs.dry_run && !inputs.retry_failed }}
+      - name: 🚀 Deploy verification site
+        if: ${{ inputs.dry_run == false && inputs.retry_failed == false }}
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           cname: cert.astraietm.in
-          keep_files: true  # Don't delete certs from previous events
+          keep_files: true
 
-      # ── Send emails (with queue + retry) ─────────────────────────────
       - name: 📧 Send certificate emails
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          CERT_VERIFY_BASE_URL: https://cert.astraietm.in
         run: |
-          ARGS="--max-retries ${{ inputs.max_retries }}"
+          set -e
 
           if [ -n "${{ inputs.event_id }}" ]; then
-            ARGS="$ARGS --event-id ${{ inputs.event_id }}"
-            QFILE="data/event_${{ inputs.event_id }}_queue.json"
+            QUEUE_FILE="data/event_${{ inputs.event_id }}_queue.json"
+            EVENT_ARGS="--event-id ${{ inputs.event_id }}"
           else
-            ARGS="$ARGS --all-events"
-            QFILE="data/all_queue.json"
+            QUEUE_FILE="data/all_queue.json"
+            EVENT_ARGS="--all-events"
           fi
 
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
+            EVENT_ARGS="$EVENT_ARGS --dry-run"
           fi
 
           if [ "${{ inputs.retry_failed }}" = "true" ]; then
-            ARGS="$ARGS --retry-failed"
-          elif [ -f "$QFILE" ]; then
-            ARGS="$ARGS --resume"
+            EVENT_ARGS="$EVENT_ARGS --retry-failed"
+          elif [ -f "$QUEUE_FILE" ]; then
+            EVENT_ARGS="$EVENT_ARGS --resume"
           fi
 
-          python generator/send_emails.py $ARGS
+          python generator/send_emails.py $EVENT_ARGS --max-retries "${{ inputs.max_retries }}"
 
-      # ── Save queue state for future runs ─────────────────────────────
-      - name: 💾 Cache queue state
+      - name: 💾 Save queue state
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data/
           key: cert-queue-${{ inputs.event_id || 'all' }}-${{ github.run_number }}
 
-      # ── Show queue status ────────────────────────────────────────────
       - name: 📊 Print queue summary
         if: always()
         run: |
           if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/send_emails.py --event-id ${{ inputs.event_id }} --status
+            python generator/send_emails.py --event-id "${{ inputs.event_id }}" --status
           else
             python generator/send_emails.py --all-events --status
           fi
 
-      # ── Upload certificates as artifacts ─────────────────────────────
       - name: 📤 Upload certificates
-        if: ${{ !inputs.retry_failed }}
+        if: ${{ always() && inputs.retry_failed == false }}
         uses: actions/upload-artifact@v4
         with:
-          name: certificates-${{ inputs.event_id || 'all-events' }}
+          name: certificates-${{ inputs.event_id || 'all-events' }}-run-${{ github.run_number }}
           path: output/
+          if-no-files-found: warn
           retention-days: 90
 
-      # ── Upload queue log as artifact ─────────────────────────────────
-      - name: 📤 Upload queue log
+      - name: 📤 Upload generated data and queue
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: queue-log-${{ inputs.event_id || 'all' }}-run-${{ github.run_number }}
+          name: certificate-data-${{ inputs.event_id || 'all-events' }}-run-${{ github.run_number }}
           path: data/
+          if-no-files-found: warn
           retention-days: 30
-
