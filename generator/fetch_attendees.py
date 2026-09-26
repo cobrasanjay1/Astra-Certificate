@@ -552,7 +552,7 @@ def main():
 
     logger.error(
         "❌ No attended participants found for %s. "
-        "Check events_registration.status and ATTENDED_STATUSES.",
+        "Check events_registration.is_used and the Supabase credentials.",
         scope,
     )
     sys.exit(1)
