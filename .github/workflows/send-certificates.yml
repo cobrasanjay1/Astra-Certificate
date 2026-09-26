@@ -23,12 +23,6 @@ on:
         required: false
         default: "3"
         type: string
-      attendance_statuses:
-        description: "Comma-separated events_registration.status values considered attended."
-        required: false
-        default: "attended"
-        type: string
-
 permissions:
   contents: write
   pages: write
@@ -69,7 +63,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          ATTENDED_STATUSES: ${{ inputs.attendance_statuses }}
           FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
           set -e
