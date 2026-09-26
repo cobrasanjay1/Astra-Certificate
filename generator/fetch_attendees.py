@@ -1,264 +1,565 @@
 """
-Fetch attendees from Supabase for certificate generation.
+Fetch attended participants from the Astra Supabase database.
 
-Reads two tables:
+Database relationships used by the certificate pipeline:
 
-  1. PROFILES_TABLE       — one row per authenticated user: id, email.
-  2. REGISTRATIONS_TABLE  — one row per event registration. Holds the three
-     fields that are asked at registration time and vary per participant
-     (name, college, event title), plus an "attended" flag set after the
-     event happens.
+    events_registration
+        ├── user_id  -> authentication_user.id
+        └── event_id -> events_event.id
 
-Only registrations where REG_ATTENDED_COL == REG_ATTENDED_VALUE are turned
-into certificates. Registrations are grouped by event title, so each
-distinct title becomes its own certificate batch — the same JSON shape
-generate.py / build_site.py / send_emails.py already expect:
+The certificate data is built from:
+    authentication_user.full_name  -> participant name
+    authentication_user.email      -> recipient email
+    events_registration.college    -> college entered during registration
+    events_event.title             -> event title
+    events_registration.status     -> attendance status
 
-    {
-      "event": {"id": "<title, filename-safe>", "title": "<title>", ...},
-      "attendees": [{"registration_id", "full_name", "email", "college"}, ...],
-      "count": <int>
-    }
+Only registrations whose status matches ATTENDED_STATUSES are included.
 
-⚠️  ADJUST THE SCHEMA CONSTANTS BELOW to match your actual Supabase table
-    and column names — everything else in this file works off them.
+Output:
+    data/event_<event-id>_attendees.json
+    data/all_events_attendees.json
 
-Usage:
-    python fetch_attendees.py                    # every event with attendees
+The rest of the certificate pipeline already consumes this format.
+
+Examples:
+    python fetch_attendees.py
+    python fetch_attendees.py --event-id 12
     python fetch_attendees.py --title "Cypher Decode"
-    python fetch_attendees.py --sample            # local test data, no network call
-    python fetch_attendees.py --dry-run           # fall back to sample data if the DB is empty/unreachable
+    python fetch_attendees.py --sample
 """
 
+import argparse
+import json
+import logging
 import os
 import sys
-import json
-import argparse
-import logging
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import SUPABASE_URL, SUPABASE_KEY, DATA_DIR, FEST_NAME, EVENT_DATE_STR, safe_id
+
+from config import (
+    DATA_DIR,
+    EVENT_DATE_STR,
+    FEST_NAME,
+    SUPABASE_KEY,
+    SUPABASE_URL,
+    safe_id,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("fetch")
 
-# ── Schema ───────────────────────────────────────────────────────────────
-# Rename these to match your real Supabase tables/columns — nothing else
-# in this file needs to change.
-PROFILES_TABLE = "profiles"            # id, email (mirrors auth.users)
-PROFILES_ID_COL = "id"
-PROFILES_EMAIL_COL = "email"
+# ---------------------------------------------------------------------------
+# Actual Django/Postgres table names from the Astra database
+# ---------------------------------------------------------------------------
 
-REGISTRATIONS_TABLE = "event_registrations"
+USERS_TABLE = "authentication_user"
+USER_ID_COL = "id"
+USER_EMAIL_COL = "email"
+USER_NAME_COL = "full_name"
+
+REGISTRATIONS_TABLE = "events_registration"
 REG_ID_COL = "id"
-REG_USER_ID_COL = "user_id"            # FK -> PROFILES_TABLE.id
-REG_NAME_COL = "name"
+REG_USER_ID_COL = "user_id"
+REG_EVENT_ID_COL = "event_id"
 REG_COLLEGE_COL = "college"
-REG_TITLE_COL = "event_title"
-REG_ATTENDED_COL = "attended"
-REG_ATTENDED_VALUE = True              # change to e.g. "ATTENDED" if it's a status string, not a boolean
+REG_STATUS_COL = "status"
+
+EVENTS_TABLE = "events_event"
+EVENT_ID_COL = "id"
+EVENT_TITLE_COL = "title"
+EVENT_DATE_COL = "event_date"
+
+# The DB currently stores attendance in events_registration.status.
+# Keep this configurable in case the application uses another value.
+ATTENDED_STATUSES = {
+    value.strip().lower()
+    for value in os.environ.get("ATTENDED_STATUSES", "attended").split(",")
+    if value.strip()
+}
+
+# Supabase returns at most 1,000 rows by default, so fetch in pages.
+PAGE_SIZE = 500
+ID_BATCH_SIZE = 500
 
 
-# ── Supabase access ────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Supabase
+# ---------------------------------------------------------------------------
 
 def get_client(supabase_url=None, supabase_key=None):
-    """Create a Supabase client, or exit with a clear error."""
     url = supabase_url or SUPABASE_URL
     key = supabase_key or SUPABASE_KEY
+
     if not url or not key:
-        logger.error(
-            "SUPABASE_URL / SUPABASE_KEY are not set "
-            "(env vars, or --supabase-url/--supabase-key)."
-        )
+        logger.error("SUPABASE_URL / SUPABASE_KEY are not set.")
         sys.exit(1)
+
     try:
         from supabase import create_client
     except ImportError:
         logger.error("'supabase' package not installed. Run: pip install supabase")
         sys.exit(1)
+
     return create_client(url, key)
 
 
-def fetch_attended_registrations(client, title=None):
-    """Return every registration row marked attended, optionally filtered to one event title."""
-    query = (
-        client.table(REGISTRATIONS_TABLE)
-        .select("*")
-        .eq(REG_ATTENDED_COL, REG_ATTENDED_VALUE)
+def fetch_all_rows(client, table, columns="*", filters=None):
+    """
+    Fetch a table in pages.
+
+    Supabase's Data API defaults to a maximum of 1,000 returned rows, so using
+    range() pagination prevents large event datasets from being truncated.
+    """
+    rows = []
+    start = 0
+
+    while True:
+        query = client.table(table).select(columns)
+
+        for column, value in (filters or {}).items():
+            if isinstance(value, tuple) and value[0] == "in":
+                query = query.in_(column, value[1])
+            else:
+                query = query.eq(column, value)
+
+        response = (
+            query
+            .order("id")
+            .range(start, start + PAGE_SIZE - 1)
+            .execute()
+        )
+
+        page = response.data or []
+        rows.extend(page)
+
+        if len(page) < PAGE_SIZE:
+            break
+
+        start += PAGE_SIZE
+
+    return rows
+
+
+def fetch_rows_by_ids(client, table, columns, column, ids):
+    """Fetch rows in safe-sized batches for IN queries."""
+    ids = [value for value in dict.fromkeys(ids) if value is not None]
+    if not ids:
+        return []
+
+    rows = []
+    for start in range(0, len(ids), ID_BATCH_SIZE):
+        batch = ids[start:start + ID_BATCH_SIZE]
+        response = (
+            client.table(table)
+            .select(columns)
+            .in_(column, batch)
+            .execute()
+        )
+        rows.extend(response.data or [])
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Database loading
+# ---------------------------------------------------------------------------
+
+def fetch_attended_registrations(client, event_id=None):
+    """
+    Fetch registrations that represent attendance.
+
+    event_id is optional. If supplied, only registrations for that event
+    are considered.
+    """
+    status_values = sorted(ATTENDED_STATUSES)
+    if not status_values:
+        raise ValueError("ATTENDED_STATUSES is empty.")
+
+    filters = {
+        REG_STATUS_COL: ("in", status_values),
+    }
+
+    if event_id is not None:
+        filters[REG_EVENT_ID_COL] = event_id
+
+    rows = fetch_all_rows(
+        client,
+        REGISTRATIONS_TABLE,
+        columns=(
+            f"{REG_ID_COL},"
+            f"{REG_USER_ID_COL},"
+            f"{REG_EVENT_ID_COL},"
+            f"{REG_COLLEGE_COL},"
+            f"{REG_STATUS_COL}"
+        ),
+        filters=filters,
     )
-    if title:
-        query = query.eq(REG_TITLE_COL, title)
-    resp = query.execute()
-    return resp.data or []
+
+    # Normalize again in Python. This protects us if the DB contains a
+    # different capitalization than the API filter values.
+    rows = [
+        row for row in rows
+        if str(row.get(REG_STATUS_COL, "")).strip().lower() in ATTENDED_STATUSES
+    ]
+
+    return rows
 
 
-def fetch_emails_by_user_id(client, user_ids):
-    """Look up {user_id: email} for a set of user ids from the profiles table."""
-    user_ids = list({uid for uid in user_ids if uid})
-    if not user_ids:
-        return {}
-    resp = (
-        client.table(PROFILES_TABLE)
-        .select(f"{PROFILES_ID_COL},{PROFILES_EMAIL_COL}")
-        .in_(PROFILES_ID_COL, user_ids)
-        .execute()
+def fetch_users(client, user_ids):
+    rows = fetch_rows_by_ids(
+        client,
+        USERS_TABLE,
+        f"{USER_ID_COL},{USER_EMAIL_COL},{USER_NAME_COL},first_name,last_name",
+        USER_ID_COL,
+        user_ids,
     )
-    return {row[PROFILES_ID_COL]: row.get(PROFILES_EMAIL_COL, "") for row in (resp.data or [])}
+
+    return {
+        row.get(USER_ID_COL): row
+        for row in rows
+        if row.get(USER_ID_COL) is not None
+    }
 
 
-def build_event_batches(registrations, emails_by_user_id):
-    """Group attended registrations by event title into the pipeline's JSON shape."""
+def fetch_events(client, event_ids):
+    rows = fetch_rows_by_ids(
+        client,
+        EVENTS_TABLE,
+        f"{EVENT_ID_COL},{EVENT_TITLE_COL},{EVENT_DATE_COL}",
+        EVENT_ID_COL,
+        event_ids,
+    )
+
+    return {
+        row.get(EVENT_ID_COL): row
+        for row in rows
+        if row.get(EVENT_ID_COL) is not None
+    }
+
+
+# ---------------------------------------------------------------------------
+# Transformation
+# ---------------------------------------------------------------------------
+
+def format_event_date(event_date):
+    """Convert the DB timestamp to the certificate's display date."""
+    if not event_date:
+        return EVENT_DATE_STR or ""
+
+    try:
+        value = str(event_date).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(value)
+        return parsed.strftime("%-d %B %Y").upper()
+    except (ValueError, TypeError):
+        # GitHub Ubuntu supports %-d. Fall back for portability.
+        try:
+            parsed = datetime.fromisoformat(str(event_date).replace("Z", "+00:00"))
+            return parsed.strftime("%d %B %Y").lstrip("0").upper()
+        except (ValueError, TypeError):
+            return EVENT_DATE_STR or str(event_date)
+
+
+def get_user_name(user):
+    name = (user.get(USER_NAME_COL) or "").strip()
+    if name:
+        return name
+
+    first = (user.get("first_name") or "").strip()
+    last = (user.get("last_name") or "").strip()
+    return " ".join(part for part in (first, last) if part) or "Participant"
+
+
+def build_event_batches(registrations, users_by_id, events_by_id):
+    """
+    Convert DB rows into the JSON structure expected by generate.py.
+
+    Registrations are grouped by event_id, not by title, so two distinct
+    database events with the same title do not get accidentally merged.
+    """
     batches = {}
-    for reg in registrations:
-        title = (reg.get(REG_TITLE_COL) or "Untitled Event").strip()
-        batch = batches.setdefault(title, {
-            "event": {
-                "id": safe_id(title),
-                "title": title,
-                "fest_name": FEST_NAME,
-                "date_str": EVENT_DATE_STR,
+
+    for registration in registrations:
+        registration_id = registration.get(REG_ID_COL)
+        user_id = registration.get(REG_USER_ID_COL)
+        event_id = registration.get(REG_EVENT_ID_COL)
+
+        user = users_by_id.get(user_id, {})
+        event = events_by_id.get(event_id, {})
+
+        title = (event.get(EVENT_TITLE_COL) or "Untitled Event").strip()
+
+        batch = batches.setdefault(
+            event_id,
+            {
+                "event": {
+                    "id": str(event_id),
+                    "title": title,
+                    "fest_name": FEST_NAME,
+                    "date_str": format_event_date(event.get(EVENT_DATE_COL)),
+                    "event_date": event.get(EVENT_DATE_COL, ""),
+                },
+                "attendees": [],
             },
-            "attendees": [],
-        })
-        batch["attendees"].append({
-            "registration_id": reg.get(REG_ID_COL),
-            "full_name": reg.get(REG_NAME_COL) or "Participant",
-            "email": emails_by_user_id.get(reg.get(REG_USER_ID_COL), ""),
-            "college": reg.get(REG_COLLEGE_COL) or "",
-        })
+        )
+
+        batch["attendees"].append(
+            {
+                "registration_id": registration_id,
+                "full_name": get_user_name(user),
+                "email": (user.get(USER_EMAIL_COL) or "").strip(),
+                "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+            }
+        )
 
     result = list(batches.values())
+
+    # Stable ordering makes certificate generation reproducible.
+    result.sort(key=lambda batch: (batch["event"]["title"].lower(), batch["event"]["id"]))
+
     for batch in result:
         batch["count"] = len(batch["attendees"])
+
     return result
 
 
-def fetch_all(title=None, supabase_url=None, supabase_key=None):
-    """Main entrypoint: fetch attended registrations, join emails, group by event title."""
-    client = get_client(supabase_url, supabase_key)
-    logger.info(
-        "⚡ Fetching attended registrations from Supabase"
-        + (f" for '{title}'" if title else " (all events)")
-    )
+def fetch_all(event_id=None, title=None, supabase_url=None, supabase_key=None):
+    """
+    Fetch attended participants and join:
+        registration -> user -> event
 
-    registrations = fetch_attended_registrations(client, title=title)
+    If title is provided, filtering happens after loading event metadata.
+    """
+    client = get_client(supabase_url, supabase_key)
+
+    logger.info("🔍 Fetching attended registrations from Supabase")
+    logger.info("   Tables: %s, %s, %s", REGISTRATIONS_TABLE, USERS_TABLE, EVENTS_TABLE)
+    logger.info("   Attendance statuses: %s", ", ".join(sorted(ATTENDED_STATUSES)))
+
+    registrations = fetch_attended_registrations(client, event_id=event_id)
+
     if not registrations:
-        logger.warning(
-            "No registrations found with "
-            f"{REG_ATTENDED_COL}={REG_ATTENDED_VALUE!r}"
-            + (f" for '{title}'" if title else "")
-        )
+        logger.warning("No attended registrations found.")
         return []
 
-    user_ids = [r.get(REG_USER_ID_COL) for r in registrations]
-    emails_by_user_id = fetch_emails_by_user_id(client, user_ids)
+    user_ids = [row.get(REG_USER_ID_COL) for row in registrations]
+    event_ids = [row.get(REG_EVENT_ID_COL) for row in registrations]
 
-    batches = build_event_batches(registrations, emails_by_user_id)
-    for b in batches:
-        logger.info(f"✅ '{b['event']['title']}': {b['count']} attendee(s)")
+    users_by_id = fetch_users(client, user_ids)
+    events_by_id = fetch_events(client, event_ids)
+
+    if title:
+        wanted = title.strip().casefold()
+        registrations = [
+            row
+            for row in registrations
+            if (
+                events_by_id.get(row.get(REG_EVENT_ID_COL), {})
+                .get(EVENT_TITLE_COL, "")
+                .strip()
+                .casefold()
+                == wanted
+            )
+        ]
+
+    batches = build_event_batches(registrations, users_by_id, events_by_id)
+
+    for batch in batches:
+        event = batch["event"]
+        logger.info(
+            "✅ %s | event_id=%s | %d attendee(s)",
+            event["title"],
+            event["id"],
+            batch["count"],
+        )
+
     return batches
 
 
-# ── Persistence ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
 
 def save_batch(batch):
-    """Save one event's batch to data/event_{id}_attendees.json."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    path = os.path.join(DATA_DIR, f"event_{batch['event']['id']}_attendees.json")
-    with open(path, "w") as f:
-        json.dump(batch, f, indent=2, default=str)
-    logger.info(f"💾 Saved {path}")
+
+    event_id = safe_id(str(batch["event"]["id"]))
+    path = os.path.join(DATA_DIR, f"event_{event_id}_attendees.json")
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(batch, f, indent=2, ensure_ascii=False, default=str)
+
+    logger.info("💾 Saved %s", path)
     return path
 
 
 def save_all(batches):
-    """Save every event's batch, plus a combined summary file."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    paths = [save_batch(b) for b in batches]
+
+    paths = [save_batch(batch) for batch in batches]
 
     summary_path = os.path.join(DATA_DIR, "all_events_attendees.json")
-    with open(summary_path, "w") as f:
-        json.dump(batches, f, indent=2, default=str)
-    logger.info(f"💾 Saved summary to {summary_path}")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(batches, f, indent=2, ensure_ascii=False, default=str)
+
+    logger.info("💾 Saved %s", summary_path)
     return paths, summary_path
 
 
-# ── Sample data (for local testing, no DB call) ─────────────────────────────
+# ---------------------------------------------------------------------------
+# Sample data
+# ---------------------------------------------------------------------------
 
 def create_sample_data(title=None):
-    """Write sample attendee batches so the rest of the pipeline can be tested
-    without a real Supabase connection."""
-    sample_titles = [
-        ("Cypher Decode", [
-            {"registration_id": 1, "full_name": "Jane Doe", "email": "jane@example.com",
-             "college": "KMCT Institute of Emerging Technology and Management"},
-            {"registration_id": 2, "full_name": "Rahul Menon", "email": "rahul@example.com",
-             "college": "College of Engineering Trivandrum"},
-        ]),
-        ("Code Breach", [
-            {"registration_id": 3, "full_name": "Sneha Prakash", "email": "sneha@example.com",
-             "college": "NIT Calicut"},
-        ]),
-    ]
-    # Derive "id" from the title with the same safe_id() used by fetch_all(),
-    # so a file saved here is found the same way a real fetch would find it.
     sample_batches = [
         {
-            "event": {"id": safe_id(t), "title": t,
-                      "fest_name": FEST_NAME, "date_str": EVENT_DATE_STR or "6 OCTOBER 2026"},
-            "attendees": attendees,
-        }
-        for t, attendees in sample_titles
+            "event": {
+                "id": "1",
+                "title": "CYPHER DECODE",
+                "fest_name": FEST_NAME,
+                "date_str": "6 OCTOBER 2026",
+                "event_date": "2026-10-06T00:00:00+00:00",
+            },
+            "attendees": [
+                {
+                    "registration_id": 1,
+                    "full_name": "Jane Doe",
+                    "email": "jane@example.com",
+                    "college": "KMCT Institute of Emerging Technology and Management",
+                },
+                {
+                    "registration_id": 2,
+                    "full_name": "Rahul Menon",
+                    "email": "rahul@example.com",
+                    "college": "College of Engineering Trivandrum",
+                },
+            ],
+        },
+        {
+            "event": {
+                "id": "2",
+                "title": "CODE BREACH",
+                "fest_name": FEST_NAME,
+                "date_str": "6 OCTOBER 2026",
+                "event_date": "2026-10-06T00:00:00+00:00",
+            },
+            "attendees": [
+                {
+                    "registration_id": 3,
+                    "full_name": "Sneha Prakash",
+                    "email": "sneha@example.com",
+                    "college": "NIT Calicut",
+                }
+            ],
+        },
     ]
-    for b in sample_batches:
-        b["count"] = len(b["attendees"])
 
     if title:
-        matches = [b for b in sample_batches if b["event"]["title"].lower() == title.lower()]
-        sample_batches = matches or sample_batches[:1]
+        wanted = title.strip().casefold()
+        sample_batches = [
+            batch for batch in sample_batches
+            if batch["event"]["title"].casefold() == wanted
+        ]
+
+    for batch in sample_batches:
+        batch["count"] = len(batch["attendees"])
 
     save_all(sample_batches)
-    total = sum(b["count"] for b in sample_batches)
-    logger.info(f"🧪 Sample data created for {len(sample_batches)} event(s), {total} attendee(s)")
+
+    total = sum(batch["count"] for batch in sample_batches)
+    logger.info(
+        "🧪 Sample data created: %d event(s), %d attendee(s)",
+        len(sample_batches),
+        total,
+    )
+
     return sample_batches
 
 
-# ── CLI ──────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch attended registrations from Supabase")
-    parser.add_argument("--title", help="Only fetch this event's title (omit to fetch ALL events)")
+    parser = argparse.ArgumentParser(
+        description="Fetch attended event participants from Supabase."
+    )
+
+    parser.add_argument(
+        "--event-id",
+        type=int,
+        help="Only fetch attendees for this events_event.id",
+    )
+    parser.add_argument(
+        "--title",
+        help="Only fetch attendees for an exact event title",
+    )
+    parser.add_argument(
+        "--all-events",
+        action="store_true",
+        help="Explicitly fetch attendees for every event",
+    )
     parser.add_argument("--supabase-url", help="Supabase URL override")
-    parser.add_argument("--supabase-key", help="Supabase API key override")
-    parser.add_argument("--sample", action="store_true", help="Write sample data instead of querying Supabase")
-    parser.add_argument("--dry-run", action="store_true", help="Fall back to sample data if the DB is empty/unreachable")
+    parser.add_argument("--supabase-key", help="Supabase key override")
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="Generate local sample data without contacting Supabase",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Use sample data only when the DB returns no attendees",
+    )
+
     args = parser.parse_args()
+
+    if args.event_id is not None and args.title:
+        parser.error("--event-id and --title cannot be used together")
 
     if args.sample:
         create_sample_data(args.title)
         return
 
-    batches = None
     try:
-        batches = fetch_all(title=args.title, supabase_url=args.supabase_url, supabase_key=args.supabase_key)
-    except SystemExit:
-        raise
-    except Exception as e:
-        logger.warning(f"Fetch failed: {e}")
+        batches = fetch_all(
+            event_id=args.event_id,
+            title=args.title,
+            supabase_url=args.supabase_url,
+            supabase_key=args.supabase_key,
+        )
+    except Exception as exc:
+        logger.exception("❌ Database fetch failed: %s", exc)
+        if args.dry_run:
+            logger.warning("🧪 --dry-run enabled, using sample data instead.")
+            create_sample_data(args.title)
+            return
+        sys.exit(1)
 
     if batches:
         save_all(batches)
-    elif args.dry_run:
-        logger.info("🧪 Dry-run mode: DB returned no attendees. Generating sample data...")
+        return
+
+    if args.dry_run:
+        logger.warning("🧪 No attended participants found, using sample data.")
         create_sample_data(args.title)
-    else:
-        logger.error(
-            "❌ No attended registrations found in Supabase"
-            + (f" for '{args.title}'" if args.title else "")
-            + f"!\n   Make sure '{REG_ATTENDED_COL}' is set to {REG_ATTENDED_VALUE!r} for"
-            "   participants who attended, or pass --dry-run to test with sample data."
-        )
-        sys.exit(1)
+        return
+
+    scope = (
+        f"event id {args.event_id}"
+        if args.event_id is not None
+        else f"title '{args.title}'"
+        if args.title
+        else "all events"
+    )
+
+    logger.error(
+        "❌ No attended participants found for %s. "
+        "Check events_registration.status and ATTENDED_STATUSES.",
+        scope,
+    )
+    sys.exit(1)
 
 
 if __name__ == "__main__":
