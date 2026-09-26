@@ -65,15 +65,18 @@ def _load_font(font_key, size_override=None):
 def _load_font_variant(variant, size):
     """Load a specific font variant: 'regular', 'bold', 'bold_italic'."""
     variants = {
-        "regular": os.path.join(FONT_DIR, "Montserrat-SemiBold.ttf"),
-        "bold": os.path.join(FONT_DIR, "Montserrat-Bold.ttf"),
-        "bold_italic": os.path.join(FONT_DIR, "Montserrat-BoldItalic.ttf"),
+        "regular": os.path.join(FONT_DIR, "CanvaSans-Medium.otf"),
+        "bold": os.path.join(FONT_DIR, "CanvaSans-Bold.otf"),
+        "bold_italic": os.path.join(FONT_DIR, "CanvaSans-BoldItalic.otf"),
     }
     path = variants.get(variant, variants["regular"])
-    try:
-        return ImageFont.truetype(path, size)
-    except (OSError, IOError):
-        return _load_font("body", size)
+    if os.path.exists(path):
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            pass
+    return _load_font("body", size)
+
 
 
 # ── Text Rendering Helpers ────────────────────────────────────────────────
@@ -105,57 +108,145 @@ def _draw_name(draw, name, region):
     return font
 
 
-def _draw_event(draw, event_title, region):
-    """Draw event title with character tracking (letter-spacing) in Montserrat-BoldItalic font."""
-    max_w = region["max_width"]
-    color = region["color"]
-    x_orig, y = region["position"]
-    text = event_title.upper()
+def _tokenize_body(body_str):
+    parts = body_str.split("**")
+    raw_tokens = []
+    for idx, part in enumerate(parts):
+        is_bi = (idx % 2 == 1)
+        words = part.split(" ")
+        for w in words:
+            if w:
+                raw_tokens.append((w, is_bi))
 
-    font_size = region.get("font_size", FONTS[region["font_key"]]["size"])
-    tracking = region.get("tracking", 12.0)
-    word_spacing = region.get("word_spacing", 25)
+    merged = []
+    for word, is_bi in raw_tokens:
+        if merged and word in [",", ".", "',", "'"]:
+            prev_word, prev_bi = merged.pop()
+            merged.append((prev_word + word, prev_bi))
+        elif merged and word.startswith((",", ".", "'")):
+            punc = word[0]
+            rest = word[1:]
+            prev_word, prev_bi = merged.pop()
+            merged.append((prev_word + punc, prev_bi))
+            if rest:
+                merged.append((rest, is_bi))
+        else:
+            merged.append((word, is_bi))
+    return merged
 
-    # Auto-scale font size / tracking if text is long
-    while font_size > 14:
-        font = _load_font(region["font_key"], font_size)
-        # Calculate total width with tracking
-        total_w = 0
-        words = text.split(' ')
-        for w_idx, word in enumerate(words):
-            for char in word:
-                bbox = draw.textbbox((0, 0), char, font=font)
-                cw = bbox[2] - bbox[0]
-                total_w += cw + tracking
-            if w_idx < len(words) - 1:
-                total_w += word_spacing
-        if total_w <= max_w or font_size <= 14:
-            break
-        font_size -= 1
-        tracking = max(2.0, tracking - 1.0)
 
-    font = _load_font(region["font_key"], font_size)
+def _measure_word_with_tracking(draw, word, font, tracking=11.5):
+    """Measure total pixel width of a word rendered with letter tracking."""
+    w = 0
+    for char in word:
+        bbox = draw.textbbox((0, 0), char, font=font)
+        cw = bbox[2] - bbox[0]
+        w += cw + tracking
+    return w - tracking if word else 0
 
-    # Render character by character with tracking
-    x = x_orig
-    words = text.split(' ')
-    for w_idx, word in enumerate(words):
-        for char in word:
-            draw.text((x, y), char, fill=color, font=font)
-            bbox = draw.textbbox((0, 0), char, font=font)
-            cw = bbox[2] - bbox[0]
-            x += cw + tracking
-        if w_idx < len(words) - 1:
-            x += word_spacing
 
-    return font
+def _draw_body(draw, participant, event_info, region):
+    """Render the body paragraph with full justification to match the reference template.
+
+    Each full line is stretched to max_width by distributing extra space evenly
+    across word gaps. The last (partial) line is left-aligned.
+    """
+    college = (participant.get("college") or "KMCT INSTITUTE OF EMERGING TECHNOLOGY AND MANAGEMENT").strip().upper()
+    event = (event_info.get("title") or "CYPHER DECODE").strip().upper()
+    fest = (event_info.get("fest_name") or "ZERO DAY").strip().upper()
+    date = (participant.get("date") or event_info.get("date_str") or "6 OCTOBER 2026").strip().upper()
+
+    body_str = BODY_TEMPLATE.format(
+        college=college,
+        event=event,
+        fest=fest,
+        date=date,
+    )
+
+    tokens = _tokenize_body(body_str)
+
+    font_size = region.get("font_size", 32)
+    font_reg = _load_font_variant("regular", font_size)
+    font_bold_italic = _load_font_variant("bold_italic", font_size)
+
+    x_start, y_start = region["position"]
+    max_w = region.get("max_width", 1430)
+    line_height = region.get("line_height", 51)
+    tracking = region.get("tracking", 13.0)
+    word_space = region.get("word_space", 26.0)
+    color = region.get("color", (30, 30, 30))
+
+    def word_px_width(word, font):
+        """Pixel width of a word with per-character tracking applied."""
+        return _measure_word_with_tracking(draw, word, font, tracking)
+
+    # ── Phase 1: lay out tokens into lines ───────────────────────────────
+    lines = []          # list of lists of (word, is_bi)
+    current_line = []
+    current_w = 0.0
+
+    for word, is_bi in tokens:
+        font = font_bold_italic if is_bi else font_reg
+        w = word_px_width(word, font)
+
+        if current_line:
+            # Cost to append: word_space + word_width
+            needed = current_w + word_space + w
+        else:
+            needed = w
+
+        if needed > max_w and current_line:
+            lines.append(current_line)
+            current_line = [(word, is_bi)]
+            current_w = w
+        else:
+            current_line.append((word, is_bi))
+            current_w = needed
+
+    if current_line:
+        lines.append(current_line)
+
+    # ── Phase 2: render each line ─────────────────────────────────────────
+    for line_idx, line_tokens in enumerate(lines):
+        is_last = (line_idx == len(lines) - 1)
+        y = y_start + line_idx * line_height
+
+        if len(line_tokens) <= 1 or is_last:
+            # Left-align (last line or single word)
+            x = x_start
+            for word, is_bi in line_tokens:
+                font = font_bold_italic if is_bi else font_reg
+                for char in word:
+                    draw.text((x, y), char, fill=color, font=font)
+                    bbox = draw.textbbox((0, 0), char, font=font)
+                    x += (bbox[2] - bbox[0]) + tracking
+                x += word_space
+        else:
+            # Full justify: distribute remaining space across word gaps
+            # Measure total word widths on this line
+            total_word_w = sum(word_px_width(w, font_bold_italic if bi else font_reg)
+                               for w, bi in line_tokens)
+            n_gaps = len(line_tokens) - 1
+            justify_space = (max_w - total_word_w) / n_gaps if n_gaps > 0 else word_space
+
+            x = float(x_start)
+            for wi, (word, is_bi) in enumerate(line_tokens):
+                font = font_bold_italic if is_bi else font_reg
+                for char in word:
+                    draw.text((int(x), y), char, fill=color, font=font)
+                    bbox = draw.textbbox((0, 0), char, font=font)
+                    x += (bbox[2] - bbox[0]) + tracking
+                if wi < n_gaps:
+                    x += justify_space
+
+
 
 
 # ── Certificate Generation ────────────────────────────────────────────────
 
 def generate_certificate(participant, event_info, cert_id):
     """
-    Generate a single certificate PNG by updating only Participant Name and Event Title.
+    Generate a single certificate PNG by updating Participant Name and the entire Body paragraph.
 
     Args:
         participant: dict with keys: name, email, college
@@ -173,19 +264,19 @@ def generate_certificate(participant, event_info, cert_id):
 
     # Create a drawing overlay (so we can composite with transparency)
     overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-    draw = ImageDraw.Draw(overlay)
+    draw_overlay = ImageDraw.Draw(overlay)
 
     # ── Cover dynamic text regions with white ──────────────────────────
     name_region = TEXT_REGIONS["name"]
-    event_region = TEXT_REGIONS["event"]
+    body_region = TEXT_REGIONS["body"]
 
-    # White-out only the name area
+    # White-out the name area
     x1, y1, x2, y2 = name_region["cover"]
-    draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
+    draw_overlay.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
 
-    # White-out only the event title area
-    x1, y1, x2, y2 = event_region["cover"]
-    draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
+    # White-out the entire body paragraph area
+    x1, y1, x2, y2 = body_region["cover"]
+    draw_overlay.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
 
     # Composite the white overlay onto the template
     img = Image.alpha_composite(img, overlay)
@@ -197,9 +288,8 @@ def generate_certificate(participant, event_info, cert_id):
     name = participant.get("name", "Unknown Participant")
     _draw_name(draw, name, name_region)
 
-    # ── Draw event title ───────────────────────────────────────────────
-    event_title = event_info.get("title", "EVENT")
-    _draw_event(draw, event_title, event_region)
+    # ── Draw full body paragraph ───────────────────────────────────────
+    _draw_body(draw, participant, event_info, body_region)
 
     # ── Convert to RGB and export ──────────────────────────────────────
     img_rgb = img.convert("RGB")
@@ -207,6 +297,7 @@ def generate_certificate(participant, event_info, cert_id):
     img_rgb.save(buffer, format="PNG", optimize=True)
     buffer.seek(0)
     return buffer.getvalue()
+
 
 
 def generate_certificate_to_file(participant, event_info, cert_id, output_dir=None):
@@ -361,14 +452,14 @@ def generate_all_events():
 
 
 def generate_test():
-    """Generate a single test certificate with sample data."""
+    """Generate a single test certificate with sample data matching the reference."""
     participant = {
-        "name": "Jane Doe",
-        "email": "jane@example.com",
-        "college": "KMCT Institute of Emerging Technology and Management",
+        "name": "Midlaj Jaleel",
+        "email": "midlaj@example.com",
+        "college": "KMCT INSTITUTE OF EMERGING TECHNOLOGY AND MANAGEMENT",
     }
     event_info = {
-        "title": "Cypher Decode",
+        "title": "CYPHER DECODE",
         "fest_name": "ZERO DAY",
         "date_str": "6 OCTOBER 2026",
     }
@@ -376,6 +467,7 @@ def generate_test():
     filepath = generate_certificate_to_file(participant, event_info, cert_id)
     logger.info(f"🧪 Test certificate: {filepath}")
     return filepath
+
 
 
 # ── CLI Entry Point ───────────────────────────────────────────────────────
