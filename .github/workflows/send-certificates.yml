@@ -66,11 +66,17 @@ jobs:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
         run: |
-          if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/fetch_attendees.py --event-id ${{ inputs.event_id }}
-          else
-            python generator/fetch_attendees.py --all-events
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
           fi
+
+          if [ -n "${{ inputs.event_id }}" ]; then
+            python generator/fetch_attendees.py --event-id ${{ inputs.event_id }} $ARGS
+          else
+            python generator/fetch_attendees.py --all-events $ARGS
+          fi
+
 
       # ── Generate certificate images ──────────────────────────────────
       - name: 🎨 Generate certificates

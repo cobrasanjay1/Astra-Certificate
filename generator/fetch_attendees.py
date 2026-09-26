@@ -463,8 +463,8 @@ def fetch_all_attendees(supabase_url=None, supabase_key=None, db_url=None, api_u
     if data is not None:
         return data
 
-    logger.error("❌ Unable to fetch attendees for all events!")
-    sys.exit(1)
+    logger.warning("Unable to fetch attendees from Supabase or Postgres DB")
+    return None
 
 
 def fetch_from_api(event_id, api_url=None, token=None):
@@ -521,15 +521,9 @@ def fetch_attendees(event_id, supabase_url=None, supabase_key=None, db_url=None,
     if data is not None:
         return data
 
-    logger.error(
-        "❌ Unable to fetch attendees!\n"
-        "Please provide one of the following environment variables:\n"
-        "  - SUPABASE_URL and SUPABASE_KEY\n"
-        "  - DATABASE_URL / SUPABASE_DB_URL\n"
-        "  - API_BASE_URL and API_TOKEN\n"
-        "Or use --sample to generate test data locally."
-    )
-    sys.exit(1)
+    logger.warning("Unable to fetch attendees from DB or API")
+    return None
+
 
 
 def save_attendees(data, event_id):
@@ -656,31 +650,75 @@ def main():
         "--sample", action="store_true",
         help="Create sample data instead of fetching from DB"
     )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Dry run mode — fall back to sample data if DB is empty or unreachable"
+    )
     args = parser.parse_args()
 
     if args.sample:
         create_sample_data(args.event_id)
-    elif args.event_id and not args.all_events:
-        data = fetch_attendees(
-            args.event_id,
-            supabase_url=args.supabase_url,
-            supabase_key=args.supabase_key,
-            db_url=args.db_url,
-            api_url=args.api_url,
-            token=args.token,
-        )
-        save_attendees(data, args.event_id)
+        return
+
+    # Single event mode
+    if args.event_id and not args.all_events:
+        data = None
+        try:
+            data = fetch_attendees(
+                args.event_id,
+                supabase_url=args.supabase_url,
+                supabase_key=args.supabase_key,
+                db_url=args.db_url,
+                api_url=args.api_url,
+                token=args.token,
+            )
+        except Exception as e:
+            logger.warning(f"Fetch failed: {e}")
+
+        if data and data.get("attendees"):
+            save_attendees(data, args.event_id)
+        elif args.dry_run:
+            logger.info("🧪 Dry-run mode: DB returned no attendees or is not configured. Generating sample data...")
+            create_sample_data(args.event_id)
+        else:
+            logger.error(
+                f"❌ Event #{args.event_id} has 0 attendees with status='ATTENDED' in database!\n"
+                "   Please mark participants as 'ATTENDED' in your Supabase DB,\n"
+                "   or run with dry_run=true for testing with sample data."
+            )
+            sys.exit(1)
+
+    # All events mode
     else:
-        all_data = fetch_all_attendees(
-            supabase_url=args.supabase_url,
-            supabase_key=args.supabase_key,
-            db_url=args.db_url,
-            api_url=args.api_url,
-            token=args.token,
-        )
-        save_all_attendees(all_data)
+        all_data = None
+        try:
+            all_data = fetch_all_attendees(
+                supabase_url=args.supabase_url,
+                supabase_key=args.supabase_key,
+                db_url=args.db_url,
+                api_url=args.api_url,
+                token=args.token,
+            )
+        except Exception as e:
+            logger.warning(f"Fetch all failed: {e}")
+
+        has_attendees = all_data and any(d.get("attendees") for d in all_data)
+
+        if has_attendees:
+            save_all_attendees(all_data)
+        elif args.dry_run:
+            logger.info("🧪 Dry-run mode: DB returned no attendees across events. Generating sample data...")
+            create_sample_data(args.event_id)
+        else:
+            logger.error(
+                "❌ No attendees with status='ATTENDED' found in database across any event!\n"
+                "   Please mark participants as 'ATTENDED' in your Supabase DB,\n"
+                "   or run with dry_run=true for testing with sample data."
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+
 
