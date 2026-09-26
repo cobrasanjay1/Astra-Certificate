@@ -422,6 +422,7 @@ def generate_batch(data_file=None, event_id=None, start_index=1):
             "name": participant["name"],
             "email": participant["email"],
             "college": participant["college"],
+            "event_id": event_info.get("id", ""),
             "event": event_info.get("title", ""),
             "date": event_info.get("date_str", ""),
         })
