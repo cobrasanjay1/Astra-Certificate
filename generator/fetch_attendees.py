@@ -65,6 +65,7 @@ REG_USER_ID_COL = "user_id"
 REG_EVENT_ID_COL = "event_id"
 REG_COLLEGE_COL = "college"
 REG_STATUS_COL = "status"
+REG_ATTENDED_COL = "is_used"
 
 EVENTS_TABLE = "events_event"
 EVENT_ID_COL = "id"
@@ -173,12 +174,10 @@ def fetch_attended_registrations(client, event_id=None):
     event_id is optional. If supplied, only registrations for that event
     are considered.
     """
-    status_values = sorted(ATTENDED_STATUSES)
-    if not status_values:
-        raise ValueError("ATTENDED_STATUSES is empty.")
-
+    # Attendance is recorded by the event check-in system in is_used.
+    # A used registration token means the participant actually checked in.
     filters = {
-        REG_STATUS_COL: ("in", status_values),
+        REG_ATTENDED_COL: True,
     }
 
     if event_id is not None:
@@ -197,12 +196,9 @@ def fetch_attended_registrations(client, event_id=None):
         filters=filters,
     )
 
-    # Normalize again in Python. This protects us if the DB contains a
-    # different capitalization than the API filter values.
-    rows = [
-        row for row in rows
-        if str(row.get(REG_STATUS_COL, "")).strip().lower() in ATTENDED_STATUSES
-    ]
+    # Keep only checked-in registrations. The status column describes the
+    # registration/payment lifecycle, while is_used records QR attendance.
+    rows = [row for row in rows if row.get(REG_ATTENDED_COL) is True]
 
     return rows
 
@@ -335,7 +331,7 @@ def fetch_all(event_id=None, title=None, supabase_url=None, supabase_key=None):
 
     logger.info("🔍 Fetching attended registrations from Supabase")
     logger.info("   Tables: %s, %s, %s", REGISTRATIONS_TABLE, USERS_TABLE, EVENTS_TABLE)
-    logger.info("   Attendance statuses: %s", ", ".join(sorted(ATTENDED_STATUSES)))
+    logger.info("   Attendance source: events_registration.is_used = true")
 
     registrations = fetch_attended_registrations(client, event_id=event_id)
 
