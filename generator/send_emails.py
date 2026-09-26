@@ -452,12 +452,20 @@ def init_queue_from_manifest(manifest_path, queue_file):
             "college": cert.get("college", ""),
         }
 
+        # In an all-events manifest, each certificate keeps its own
+        # event title/date. Do not use the top-level "All Events" wrapper.
+        cert_event = dict(event)
+        if cert.get("event"):
+            cert_event["title"] = cert["event"]
+        if cert.get("date"):
+            cert_event["date_str"] = cert["date"]
+
         queue.add(
             cert_id=cert_id,
             email=cert.get("email", ""),
             name=cert.get("name", ""),
             cert_filepath=cert_filepath,
-            event=event,
+            event=cert_event,
             participant=participant,
         )
 
