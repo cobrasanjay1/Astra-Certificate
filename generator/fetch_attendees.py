@@ -238,6 +238,235 @@ def fetch_from_postgres(event_id, db_url=None):
         return None
 
 
+def fetch_all_from_supabase(supabase_url=None, supabase_key=None):
+    """
+    Fetch attendee and event data for ALL events directly using Supabase client.
+    """
+    url = supabase_url or SUPABASE_URL
+    key = supabase_key or SUPABASE_KEY
+
+    if not url or not key:
+        return None
+
+    try:
+        from supabase import create_client
+    except ImportError:
+        logger.warning("'supabase' package not installed. Run: pip install supabase")
+        return None
+
+    logger.info(f"⚡ Fetching ALL events directly from Supabase DB ({url})")
+
+    try:
+        supabase = create_client(url, key)
+
+        # 1. Fetch all events
+        events_resp = supabase.table("events_event").select("*").execute()
+        if not events_resp.data:
+            logger.error("No events found in Supabase table 'events_event'")
+            return []
+
+        # 2. Fetch all registrations with status='ATTENDED'
+        reg_resp = (
+            supabase.table("events_registration")
+            .select("*")
+            .eq("status", "ATTENDED")
+            .execute()
+        )
+        all_registrations = reg_resp.data or []
+
+        if not all_registrations:
+            logger.warning("No registrations found with status='ATTENDED' across any event")
+            return []
+
+        # 3. Fetch user details for all attendees
+        user_ids = list({r["user_id"] for r in all_registrations if "user_id" in r})
+        users_by_id = {}
+        if user_ids:
+            user_resp = (
+                supabase.table("authentication_user")
+                .select("*")
+                .in_("id", user_ids)
+                .execute()
+            )
+            for u in (user_resp.data or []):
+                users_by_id[u["id"]] = u
+
+        # Group registrations by event_id
+        regs_by_event = {}
+        for reg in all_registrations:
+            eid = reg.get("event_id")
+            if eid not in regs_by_event:
+                regs_by_event[eid] = []
+            regs_by_event[eid].append(reg)
+
+        all_data = []
+        for raw_event in events_resp.data:
+            eid = raw_event.get("id")
+            registrations = regs_by_event.get(eid, [])
+            if not registrations:
+                continue
+
+            event_date_raw = raw_event.get("event_date", "")
+            event = {
+                "id": eid,
+                "title": raw_event.get("title", "Event"),
+                "fest_name": raw_event.get("fest_name", "ZERO DAY"),
+                "event_date": str(event_date_raw) if event_date_raw else "",
+                "date_str": format_date_str(event_date_raw),
+                "venue": raw_event.get("venue", ""),
+                "category": raw_event.get("category", ""),
+            }
+
+            attendees = []
+            for reg in registrations:
+                user = users_by_id.get(reg.get("user_id"), {})
+                full_name = user.get("full_name") or user.get("email") or "Participant"
+                email = user.get("email", "")
+                college = reg.get("college") or user.get("college") or ""
+                department = reg.get("department") or user.get("department") or ""
+
+                attendees.append({
+                    "registration_id": reg.get("id"),
+                    "full_name": full_name,
+                    "email": email,
+                    "college": college,
+                    "department": department,
+                })
+
+            event_data = {
+                "event": event,
+                "attendees": attendees,
+                "count": len(attendees),
+            }
+            all_data.append(event_data)
+            logger.info(f"✅ Event #{eid} '{event['title']}': fetched {len(attendees)} attendees")
+
+        return all_data
+
+    except Exception as e:
+        logger.error(f"Error fetching all events from Supabase: {e}")
+        return None
+
+
+def fetch_all_from_postgres(db_url=None):
+    """
+    Fetch all events and attendees using direct PostgreSQL / SQLite connection.
+    """
+    url = db_url or DATABASE_URL
+    if not url:
+        return None
+
+    logger.info("🔌 Connecting to database to fetch ALL events")
+
+    try:
+        if url.startswith("sqlite"):
+            import sqlite3
+            conn = sqlite3.connect(url.replace("sqlite:///", ""))
+            conn.row_factory = sqlite3.Row
+        else:
+            import psycopg2
+            import psycopg2.extras
+            conn = psycopg2.connect(url)
+
+        cursor = conn.cursor()
+
+        # Fetch Events
+        cursor.execute("SELECT id, title, event_date, venue, category FROM events_event")
+        events_rows = cursor.fetchall()
+        if not events_rows:
+            logger.error("No events found in database")
+            return []
+
+        all_data = []
+        for r in events_rows:
+            if isinstance(r, dict) or hasattr(r, "keys"):
+                eid, title, event_date, venue, category = r["id"], r["title"], r["event_date"], r["venue"], r["category"]
+            else:
+                eid, title, event_date, venue, category = r
+
+            event = {
+                "id": eid,
+                "title": title,
+                "fest_name": "ZERO DAY",
+                "event_date": str(event_date) if event_date else "",
+                "date_str": format_date_str(event_date),
+                "venue": venue or "",
+                "category": category or "",
+            }
+
+            query = """
+                SELECT 
+                    r.id as registration_id,
+                    u.email,
+                    u.full_name,
+                    COALESCE(NULLIF(r.college, ''), u.college, '') as college,
+                    COALESCE(NULLIF(r.department, ''), u.department, '') as department
+                FROM events_registration r
+                JOIN authentication_user u ON r.user_id = u.id
+                WHERE r.event_id = %s AND r.status = 'ATTENDED'
+            """ if not url.startswith("sqlite") else """
+                SELECT 
+                    r.id as registration_id,
+                    u.email,
+                    u.full_name,
+                    COALESCE(NULLIF(r.college, ''), u.college, '') as college,
+                    COALESCE(NULLIF(r.department, ''), u.department, '') as department
+                FROM events_registration r
+                JOIN authentication_user u ON r.user_id = u.id
+                WHERE r.event_id = ? AND r.status = 'ATTENDED'
+            """
+
+            cursor.execute(query, (eid,))
+            rows = cursor.fetchall()
+
+            attendees = []
+            for reg in rows:
+                if isinstance(reg, dict) or hasattr(reg, "keys"):
+                    reg_id, email, full_name, college, department = reg["registration_id"], reg["email"], reg["full_name"], reg["college"], reg["department"]
+                else:
+                    reg_id, email, full_name, college, department = reg
+
+                attendees.append({
+                    "registration_id": reg_id,
+                    "full_name": full_name or email,
+                    "email": email,
+                    "college": college or "",
+                    "department": department or "",
+                })
+
+            if attendees:
+                event_data = {
+                    "event": event,
+                    "attendees": attendees,
+                    "count": len(attendees),
+                }
+                all_data.append(event_data)
+                logger.info(f"✅ Event #{eid} '{title}': fetched {len(attendees)} attendees via Direct SQL")
+
+        conn.close()
+        return all_data
+
+    except Exception as e:
+        logger.error(f"Error querying database for all events: {e}")
+        return None
+
+
+def fetch_all_attendees(supabase_url=None, supabase_key=None, db_url=None, api_url=None, token=None):
+    """
+    Fetch attendee and event data for ALL events.
+    """
+    data = fetch_all_from_supabase(supabase_url, supabase_key)
+    if data is not None:
+        return data
+
+    data = fetch_all_from_postgres(db_url)
+    if data is not None:
+        return data
+
+    logger.error("❌ Unable to fetch attendees for all events!")
+    sys.exit(1)
+
+
 def fetch_from_api(event_id, api_url=None, token=None):
     """
     Fallback HTTP API fetcher for backward compatibility.
@@ -275,22 +504,19 @@ def fetch_from_api(event_id, api_url=None, token=None):
 
 def fetch_attendees(event_id, supabase_url=None, supabase_key=None, db_url=None, api_url=None, token=None):
     """
-    Main fetch entrypoint with multi-source fallback hierarchy:
+    Main fetch entrypoint with multi-source fallback hierarchy for a single event:
     1. Supabase Client SDK
     2. Direct Postgres SQL Connection
     3. HTTP API
     """
-    # Try Supabase Client SDK first
     data = fetch_from_supabase(event_id, supabase_url, supabase_key)
     if data is not None:
         return data
 
-    # Try Direct Postgres DB Connection
     data = fetch_from_postgres(event_id, db_url)
     if data is not None:
         return data
 
-    # Try Legacy HTTP API
     data = fetch_from_api(event_id, api_url, token)
     if data is not None:
         return data
@@ -318,53 +544,109 @@ def save_attendees(data, event_id):
     return filepath
 
 
-def create_sample_data(event_id):
+def save_all_attendees(all_data):
+    """Save all events data and individual event JSONs."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    for event_data in all_data:
+        eid = event_data["event"]["id"]
+        save_attendees(event_data, eid)
+
+    summary_file = os.path.join(DATA_DIR, "all_events_attendees.json")
+    with open(summary_file, "w") as f:
+        json.dump(all_data, f, indent=2, default=str)
+    logger.info(f"💾 Saved all events data summary to {summary_file}")
+    return summary_file
+
+
+def create_sample_data(event_id=None):
     """
     Create sample attendee data for local testing.
     """
-    sample = {
-        "event": {
-            "id": event_id,
-            "title": "Cypher Decode",
-            "fest_name": "ZERO DAY",
-            "event_date": "2026-10-06T10:00:00+05:30",
-            "date_str": "6 OCTOBER 2026",
-            "venue": "Main Auditorium",
-            "category": "TECHNICAL",
+    if event_id is not None:
+        events_list = [event_id]
+    else:
+        events_list = [1, 2]
+
+    all_data = []
+
+    samples_map = {
+        1: {
+            "event": {
+                "id": 1,
+                "title": "Cypher Decode",
+                "fest_name": "ZERO DAY",
+                "event_date": "2026-10-06T10:00:00+05:30",
+                "date_str": "6 OCTOBER 2026",
+                "venue": "Main Auditorium",
+                "category": "TECHNICAL",
+            },
+            "attendees": [
+                {
+                    "registration_id": 1,
+                    "full_name": "Jane Doe",
+                    "email": "jane@example.com",
+                    "college": "KMCT Institute of Emerging Technology and Management",
+                    "department": "CSE (Cyber Security)",
+                },
+                {
+                    "registration_id": 2,
+                    "full_name": "Rahul Menon",
+                    "email": "rahul@example.com",
+                    "college": "KMCT Institute of Emerging Technology and Management",
+                    "department": "CSE (Cyber Security)",
+                },
+                {
+                    "registration_id": 3,
+                    "full_name": "Aisha Fatima Khan",
+                    "email": "aisha@example.com",
+                    "college": "College of Engineering Trivandrum",
+                    "department": "Computer Science",
+                },
+            ],
         },
-        "attendees": [
-            {
-                "registration_id": 1,
-                "full_name": "Jane Doe",
-                "email": "jane@example.com",
-                "college": "KMCT Institute of Emerging Technology and Management",
-                "department": "CSE (Cyber Security)",
+        2: {
+            "event": {
+                "id": 2,
+                "title": "Code Breach",
+                "fest_name": "ZERO DAY",
+                "event_date": "2026-10-06T14:00:00+05:30",
+                "date_str": "6 OCTOBER 2026",
+                "venue": "Lab 3",
+                "category": "TECHNICAL",
             },
-            {
-                "registration_id": 2,
-                "full_name": "Rahul Menon",
-                "email": "rahul@example.com",
-                "college": "KMCT Institute of Emerging Technology and Management",
-                "department": "CSE (Cyber Security)",
-            },
-            {
-                "registration_id": 3,
-                "full_name": "Aisha Fatima Khan",
-                "email": "aisha@example.com",
-                "college": "College of Engineering Trivandrum",
-                "department": "Computer Science",
-            },
-        ],
+            "attendees": [
+                {
+                    "registration_id": 4,
+                    "full_name": "Arjun Varma",
+                    "email": "arjun@example.com",
+                    "college": "KMCT Institute of Emerging Technology and Management",
+                    "department": "CSE (Cyber Security)",
+                },
+                {
+                    "registration_id": 5,
+                    "full_name": "Sneha Prakash",
+                    "email": "sneha@example.com",
+                    "college": "NIT Calicut",
+                    "department": "Computer Science & Engineering",
+                },
+            ],
+        },
     }
 
-    filepath = save_attendees(sample, event_id)
-    logger.info(f"🧪 Sample data created with {len(sample['attendees'])} attendees")
-    return filepath
+    for eid in events_list:
+        sample = samples_map.get(eid, samples_map[1])
+        save_attendees(sample, eid)
+        all_data.append(sample)
+
+    save_all_attendees(all_data)
+    total_attendees = sum(len(d["attendees"]) for d in all_data)
+    logger.info(f"🧪 Sample data created for {len(all_data)} events ({total_attendees} total attendees)")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch attendees from Supabase DB")
-    parser.add_argument("--event-id", type=int, required=True, help="Event ID")
+    parser.add_argument("--event-id", type=int, help="Event ID (optional; omit to fetch ALL events)")
+    parser.add_argument("--all-events", action="store_true", help="Fetch all events explicitly")
     parser.add_argument("--supabase-url", help="Supabase URL override")
     parser.add_argument("--supabase-key", help="Supabase API key override")
     parser.add_argument("--db-url", help="Database URL override")
@@ -378,7 +660,7 @@ def main():
 
     if args.sample:
         create_sample_data(args.event_id)
-    else:
+    elif args.event_id and not args.all_events:
         data = fetch_attendees(
             args.event_id,
             supabase_url=args.supabase_url,
@@ -388,7 +670,17 @@ def main():
             token=args.token,
         )
         save_attendees(data, args.event_id)
+    else:
+        all_data = fetch_all_attendees(
+            supabase_url=args.supabase_url,
+            supabase_key=args.supabase_key,
+            db_url=args.db_url,
+            api_url=args.api_url,
+            token=args.token,
+        )
+        save_all_attendees(all_data)
 
 
 if __name__ == "__main__":
     main()
+

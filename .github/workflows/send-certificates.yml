@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       event_id:
-        description: 'Event ID from the database'
-        required: true
-        type: number
+        description: 'Event ID from database (leave blank to send to ALL participants of ALL events)'
+        required: false
+        default: ''
+        type: string
       dry_run:
         description: 'Dry run — generate certs & queue, but don''t send emails'
         required: false
@@ -53,7 +54,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/
-          key: cert-queue-event-${{ inputs.event_id }}
+          key: cert-queue-${{ inputs.event_id || 'all' }}
 
       # ── Fetch attendees from DB ──────────────────────────────────────
       - name: 🔍 Fetch attendees from DB
@@ -64,17 +65,32 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-        run: python generator/fetch_attendees.py --event-id ${{ inputs.event_id }}
+        run: |
+          if [ -n "${{ inputs.event_id }}" ]; then
+            python generator/fetch_attendees.py --event-id ${{ inputs.event_id }}
+          else
+            python generator/fetch_attendees.py --all-events
+          fi
 
       # ── Generate certificate images ──────────────────────────────────
       - name: 🎨 Generate certificates
         if: ${{ !inputs.retry_failed }}
-        run: python generator/generate.py --event-id ${{ inputs.event_id }}
+        run: |
+          if [ -n "${{ inputs.event_id }}" ]; then
+            python generator/generate.py --event-id ${{ inputs.event_id }}
+          else
+            python generator/generate.py --all-events
+          fi
 
       # ── Build verification site ──────────────────────────────────────
       - name: 🌐 Build verification site
         if: ${{ !inputs.dry_run && !inputs.retry_failed }}
-        run: python generator/build_site.py --event-id ${{ inputs.event_id }}
+        run: |
+          if [ -n "${{ inputs.event_id }}" ]; then
+            python generator/build_site.py --event-id ${{ inputs.event_id }}
+          else
+            python generator/build_site.py --all-events
+          fi
 
       # ── Deploy verification site to GitHub Pages ─────────────────────
       - name: 🚀 Deploy to GitHub Pages
@@ -91,7 +107,15 @@ jobs:
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
-          ARGS="--event-id ${{ inputs.event_id }} --max-retries ${{ inputs.max_retries }}"
+          ARGS="--max-retries ${{ inputs.max_retries }}"
+
+          if [ -n "${{ inputs.event_id }}" ]; then
+            ARGS="$ARGS --event-id ${{ inputs.event_id }}"
+            QFILE="data/event_${{ inputs.event_id }}_queue.json"
+          else
+            ARGS="$ARGS --all-events"
+            QFILE="data/all_queue.json"
+          fi
 
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
@@ -99,7 +123,7 @@ jobs:
 
           if [ "${{ inputs.retry_failed }}" = "true" ]; then
             ARGS="$ARGS --retry-failed"
-          elif [ -f "data/event_${{ inputs.event_id }}_queue.json" ]; then
+          elif [ -f "$QFILE" ]; then
             ARGS="$ARGS --resume"
           fi
 
@@ -111,19 +135,24 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: data/
-          key: cert-queue-event-${{ inputs.event_id }}-${{ github.run_number }}
+          key: cert-queue-${{ inputs.event_id || 'all' }}-${{ github.run_number }}
 
       # ── Show queue status ────────────────────────────────────────────
       - name: 📊 Print queue summary
         if: always()
-        run: python generator/send_emails.py --event-id ${{ inputs.event_id }} --status
+        run: |
+          if [ -n "${{ inputs.event_id }}" ]; then
+            python generator/send_emails.py --event-id ${{ inputs.event_id }} --status
+          else
+            python generator/send_emails.py --all-events --status
+          fi
 
       # ── Upload certificates as artifacts ─────────────────────────────
       - name: 📤 Upload certificates
         if: ${{ !inputs.retry_failed }}
         uses: actions/upload-artifact@v4
         with:
-          name: certificates-event-${{ inputs.event_id }}
+          name: certificates-${{ inputs.event_id || 'all-events' }}
           path: output/
           retention-days: 90
 
@@ -132,6 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: queue-log-event-${{ inputs.event_id }}-run-${{ github.run_number }}
-          path: data/event_${{ inputs.event_id }}_queue.json
+          name: queue-log-${{ inputs.event_id || 'all' }}-run-${{ github.run_number }}
+          path: data/
           retention-days: 30
+

@@ -23,41 +23,43 @@ Event Ends → Admin Triggers GitHub Action → Certificates Generated → Email
 # Install dependencies
 pip install -r generator/requirements.txt
 
-# Generate sample data (no API needed)
-python3 generator/fetch_attendees.py --event-id 1 --sample
+# Fetch attendees for ALL events (or use --sample for test data)
+python3 generator/fetch_attendees.py --sample
 
-# Generate certificates
-python3 generator/generate.py --event-id 1
+# Generate certificates for ALL events
+python3 generator/generate.py
 
-# Build verification site
-python3 generator/build_site.py --event-id 1
+# Build verification site for ALL events
+python3 generator/build_site.py
 
-# Dry-run emails (doesn't actually send)
-python3 generator/send_emails.py --event-id 1 --dry-run
+# Dry-run emails for ALL events (doesn't send emails)
+python3 generator/send_emails.py --dry-run
 
-# Check queue status
-python3 generator/send_emails.py --event-id 1 --status
+# Check queue status across all events
+python3 generator/send_emails.py --status
 ```
+
+> **Note:** You can still target a single event by passing `--event-id <id>` to any command above.
 
 ## Email Queue & Retry
 
 The email sender uses a **persistent file-based queue** that survives crashes:
 
 ```bash
-# First run — sends all emails
-python3 generator/send_emails.py --event-id 1
+# First run — sends emails for all events
+python3 generator/send_emails.py
 
 # Resume after crash/timeout
-python3 generator/send_emails.py --event-id 1 --resume
+python3 generator/send_emails.py --resume
 
 # Retry only failed emails
-python3 generator/send_emails.py --event-id 1 --retry-failed
+python3 generator/send_emails.py --retry-failed
 
 # Custom max retries + delay
-python3 generator/send_emails.py --event-id 1 --max-retries 5 --delay 1.0
+python3 generator/send_emails.py --max-retries 5 --delay 1.0
 ```
 
-Queue state is saved to `data/event_{id}_queue.json` after every operation.
+Queue state is saved to `data/all_queue.json` (or `data/event_{id}_queue.json` for single event runs) after every operation.
 
 ## GitHub Action
 

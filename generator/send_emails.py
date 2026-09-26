@@ -479,6 +479,7 @@ def main():
     )
     parser.add_argument("--event-id", type=int, help="Event ID (looks for manifest in data/)")
     parser.add_argument("--manifest", help="Path to manifest JSON")
+    parser.add_argument("--all-events", action="store_true", help="Send emails for ALL events")
     parser.add_argument("--dry-run", action="store_true", help="Log without sending emails")
     parser.add_argument(
         "--resume", action="store_true",
@@ -500,15 +501,15 @@ def main():
     args = parser.parse_args()
 
     # Determine paths
-    if args.event_id:
+    if args.event_id and not args.all_events:
         manifest_path = os.path.join(DATA_DIR, f"event_{args.event_id}_manifest.json")
         queue_file = os.path.join(DATA_DIR, f"event_{args.event_id}_queue.json")
     elif args.manifest:
         manifest_path = args.manifest
         queue_file = args.manifest.replace("_manifest.json", "_queue.json")
     else:
-        parser.print_help()
-        sys.exit(1)
+        manifest_path = os.path.join(DATA_DIR, "all_manifest.json")
+        queue_file = os.path.join(DATA_DIR, "all_queue.json")
 
     # Status check only
     if args.status:
@@ -554,3 +555,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

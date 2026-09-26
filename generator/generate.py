@@ -232,13 +232,13 @@ def make_cert_id(event_year, index):
 
 # ── Batch Generation ──────────────────────────────────────────────────────
 
-def generate_batch(data_file=None, event_id=None):
+def generate_batch(data_file=None, event_id=None, start_index=1):
     """
-    Generate certificates for all attendees.
+    Generate certificates for attendees of a specific event or data file.
 
     Reads from either:
     - A JSON data file (from fetch_attendees.py)
-    - Direct event_id (looks for data/{event_id}_attendees.json)
+    - Direct event_id (looks for data/event_{event_id}_attendees.json)
 
     Returns list of (cert_id, filepath, participant) tuples.
     """
@@ -261,7 +261,7 @@ def generate_batch(data_file=None, event_id=None):
     attendees = data.get("attendees", [])
 
     if not attendees:
-        logger.warning("No attendees found — nothing to generate")
+        logger.warning(f"No attendees found for event #{event_info.get('id', 'unknown')} — nothing to generate")
         return []
 
     # Determine event year for cert IDs
@@ -272,15 +272,14 @@ def generate_batch(data_file=None, event_id=None):
         year = datetime.now().year
 
     results = []
-    # Also build a manifest for the verification site
     manifest = {
         "event": event_info,
         "generated_at": datetime.now().isoformat(),
         "certificates": [],
     }
 
-    for i, attendee in enumerate(attendees, start=1):
-        cert_id = make_cert_id(year, i)
+    for idx, attendee in enumerate(attendees, start=start_index):
+        cert_id = make_cert_id(year, idx)
         participant = {
             "name": attendee.get("full_name", attendee.get("name", "")),
             "email": attendee.get("email", ""),
@@ -299,15 +298,66 @@ def generate_batch(data_file=None, event_id=None):
             "date": event_info.get("date_str", ""),
         })
 
-    # Save manifest for email sender and site builder
     manifest_path = os.path.join(DATA_DIR, f"event_{event_info.get('id', 'unknown')}_manifest.json")
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
     logger.info(f"📋 Manifest saved: {manifest_path}")
 
-    logger.info(f"\n🎉 Generated {len(results)} certificates!")
+    logger.info(f"🎉 Generated {len(results)} certificates for event '{event_info.get('title')}'!")
     return results
+
+
+def generate_all_events():
+    """
+    Find all event attendee files in DATA_DIR and generate certificates for ALL events.
+    Also creates a unified all_manifest.json.
+    """
+    import glob
+
+    attendees_files = sorted(glob.glob(os.path.join(DATA_DIR, "event_*_attendees.json")))
+    if not attendees_files:
+        logger.error(f"No event attendee files found in {DATA_DIR}")
+        logger.info("Run fetch_attendees.py first to fetch all events")
+        sys.exit(1)
+
+    logger.info(f"🚀 Found {len(attendees_files)} event data files. Generating certificates for ALL events...")
+
+    all_results = []
+    combined_certificates = []
+    current_counter = 1
+
+    for filepath in attendees_files:
+        with open(filepath) as f:
+            data = json.load(f)
+        event_info = data.get("event", {})
+        attendees = data.get("attendees", [])
+
+        if not attendees:
+            continue
+
+        results = generate_batch(data_file=filepath, start_index=current_counter)
+        all_results.extend(results)
+        current_counter += len(results)
+
+        manifest_path = os.path.join(DATA_DIR, f"event_{event_info.get('id', 'unknown')}_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                m = json.load(f)
+                combined_certificates.extend(m.get("certificates", []))
+
+    all_manifest = {
+        "event": {"id": "all", "title": "All Events"},
+        "generated_at": datetime.now().isoformat(),
+        "certificates": combined_certificates,
+    }
+    all_manifest_path = os.path.join(DATA_DIR, "all_manifest.json")
+    with open(all_manifest_path, "w") as f:
+        json.dump(all_manifest, f, indent=2)
+
+    logger.info(f"\n✨ COMPLETE: Generated {len(all_results)} total certificates across all events!")
+    logger.info(f"📋 Unified manifest saved: {all_manifest_path}")
+    return all_results
 
 
 def generate_test():
@@ -334,6 +384,7 @@ def main():
     parser = argparse.ArgumentParser(description="Astra Certificate Generator")
     parser.add_argument("--event-id", type=int, help="Event ID from the database")
     parser.add_argument("--data-file", help="Path to attendees JSON file")
+    parser.add_argument("--all-events", action="store_true", help="Generate certificates for ALL events")
     parser.add_argument("--test", action="store_true", help="Generate a test certificate")
     args = parser.parse_args()
 
@@ -342,9 +393,9 @@ def main():
     elif args.event_id or args.data_file:
         generate_batch(data_file=args.data_file, event_id=args.event_id)
     else:
-        parser.print_help()
-        sys.exit(1)
+        generate_all_events()
 
 
 if __name__ == "__main__":
     main()
+

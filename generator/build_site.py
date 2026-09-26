@@ -535,24 +535,56 @@ def build_site(manifest_path):
     logger.info(f"   Certs:    {SITE_DIR}/certificates/")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Build the certificate verification site")
-    parser.add_argument("--event-id", type=int, help="Event ID")
-    parser.add_argument("--manifest", help="Path to manifest JSON")
-    args = parser.parse_args()
+def build_all_site():
+    """Build verification site incorporating all event manifests."""
+    import glob
 
-    if args.manifest:
-        manifest_path = args.manifest
-    elif args.event_id:
-        manifest_path = os.path.join(
-            DATA_DIR, f"event_{args.event_id}_manifest.json"
-        )
+    all_manifest_path = os.path.join(DATA_DIR, "all_manifest.json")
+    if os.path.exists(all_manifest_path):
+        manifest_path = all_manifest_path
     else:
-        parser.print_help()
-        sys.exit(1)
+        manifest_files = sorted(glob.glob(os.path.join(DATA_DIR, "event_*_manifest.json")))
+        if not manifest_files:
+            logger.error(f"No manifest files found in {DATA_DIR}")
+            logger.info("Run generate.py first to generate certificates")
+            sys.exit(1)
+
+        combined_certs = []
+        for mf in manifest_files:
+            with open(mf) as f:
+                data = json.load(f)
+                combined_certs.extend(data.get("certificates", []))
+
+        combined_manifest = {
+            "event": {"id": "all", "title": "All Events"},
+            "generated_at": datetime.now().isoformat(),
+            "certificates": combined_certs,
+        }
+        manifest_path = os.path.join(DATA_DIR, "all_manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(combined_manifest, f, indent=2)
 
     build_site(manifest_path)
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Build the certificate verification site")
+    parser.add_argument("--event-id", type=int, help="Event ID")
+    parser.add_argument("--manifest", help="Path to manifest JSON")
+    parser.add_argument("--all-events", action="store_true", help="Build site for ALL events")
+    args = parser.parse_args()
+
+    if args.manifest:
+        build_site(args.manifest)
+    elif args.event_id and not args.all_events:
+        manifest_path = os.path.join(
+            DATA_DIR, f"event_{args.event_id}_manifest.json"
+        )
+        build_site(manifest_path)
+    else:
+        build_all_site()
+
+
 if __name__ == "__main__":
     main()
+
