@@ -85,24 +85,16 @@ def _measure_text(draw, text, font):
 
 
 def _draw_name(draw, name, region):
-    """Draw the 'AWARDED TO' label and participant name, auto-scaling if too wide."""
-    font = _load_font(region["font_key"])
+    """Draw participant name, auto-scaling if too wide."""
     max_w = region["max_width"]
     color = region["color"]
+    x, y = region["position"]
 
-    # Draw "AWARDED TO" label
-    label_pos = region.get("position", (90, 470))
-    label_color = region.get("label_color", (60, 60, 60))
-    label_font = _load_font_variant("regular", 18)
-    draw.text(label_pos, "AWARDED TO", fill=label_color, font=label_font)
-
-    # Draw participant name below the label
-    name_pos = region.get("name_position", (90, 520))
-    x, y = name_pos
+    font_size = region.get("font_size", FONTS[region["font_key"]]["size"])
+    font = _load_font(region["font_key"], font_size)
 
     # Auto-scale down if name is too wide
-    font_size = FONTS[region["font_key"]]["size"]
-    while font_size > 30:
+    while font_size > 24:
         font = _load_font(region["font_key"], font_size)
         w, h = _measure_text(draw, name, font)
         if w <= max_w:
@@ -110,70 +102,60 @@ def _draw_name(draw, name, region):
         font_size -= 2
 
     draw.text((x, y), name, fill=color, font=font)
-    return h
+    return font
 
 
-def _parse_body_segments(template_text):
-    """
-    Parse the body template into segments.
-    Text between ** markers is bold+italic.
-    Returns list of (text, is_bold_italic) tuples.
-    """
-    segments = []
-    parts = template_text.split("**")
-    for i, part in enumerate(parts):
-        if part:
-            segments.append((part, i % 2 == 1))
-    return segments
-
-
-def _draw_body_paragraph(draw, body_text, region):
-    """
-    Draw the body paragraph with mixed bold/italic formatting.
-    Handles word-wrapping across the max_width.
-    """
-    font_regular = _load_font_variant("regular", FONTS["body"]["size"])
-    font_emphasis = _load_font_variant("bold_italic", FONTS["body_italic"]["size"])
-
-    segments = _parse_body_segments(body_text)
+def _draw_event(draw, event_title, region):
+    """Draw event title with character tracking (letter-spacing) in Montserrat-BoldItalic font."""
     max_w = region["max_width"]
-    x_start, y_start = region["position"]
-    line_spacing = region.get("line_spacing", 38)
     color = region["color"]
+    x_orig, y = region["position"]
+    text = event_title.upper()
 
-    # Flatten segments into individual words with their styles
-    words = []
-    for text, is_emphasis in segments:
-        for word in text.split():
-            if word:
-                words.append((word, is_emphasis))
+    font_size = region.get("font_size", FONTS[region["font_key"]]["size"])
+    tracking = region.get("tracking", 12.0)
+    word_spacing = region.get("word_spacing", 25)
 
-    # Word-wrap and draw
-    x = x_start
-    y = y_start
+    # Auto-scale font size / tracking if text is long
+    while font_size > 14:
+        font = _load_font(region["font_key"], font_size)
+        # Calculate total width with tracking
+        total_w = 0
+        words = text.split(' ')
+        for w_idx, word in enumerate(words):
+            for char in word:
+                bbox = draw.textbbox((0, 0), char, font=font)
+                cw = bbox[2] - bbox[0]
+                total_w += cw + tracking
+            if w_idx < len(words) - 1:
+                total_w += word_spacing
+        if total_w <= max_w or font_size <= 14:
+            break
+        font_size -= 1
+        tracking = max(2.0, tracking - 1.0)
 
-    for word_text, is_emphasis in words:
-        font = font_emphasis if is_emphasis else font_regular
-        word_w, word_h = _measure_text(draw, word_text + " ", font)
+    font = _load_font(region["font_key"], font_size)
 
-        if x + word_w > x_start + max_w and x > x_start:
-            # Wrap to next line
-            x = x_start
-            y += line_spacing
+    # Render character by character with tracking
+    x = x_orig
+    words = text.split(' ')
+    for w_idx, word in enumerate(words):
+        for char in word:
+            draw.text((x, y), char, fill=color, font=font)
+            bbox = draw.textbbox((0, 0), char, font=font)
+            cw = bbox[2] - bbox[0]
+            x += cw + tracking
+        if w_idx < len(words) - 1:
+            x += word_spacing
 
-        draw.text((x, y), word_text, fill=color, font=font)
-        # Add space after word
-        space_w, _ = _measure_text(draw, " ", font)
-        x += word_w + space_w - _measure_text(draw, " ", font)[0] + 2
-
-    return y - y_start + line_spacing
+    return font
 
 
 # ── Certificate Generation ────────────────────────────────────────────────
 
 def generate_certificate(participant, event_info, cert_id):
     """
-    Generate a single certificate PNG.
+    Generate a single certificate PNG by updating only Participant Name and Event Title.
 
     Args:
         participant: dict with keys: name, email, college
@@ -195,14 +177,14 @@ def generate_certificate(participant, event_info, cert_id):
 
     # ── Cover dynamic text regions with white ──────────────────────────
     name_region = TEXT_REGIONS["name"]
-    body_region = TEXT_REGIONS["body"]
+    event_region = TEXT_REGIONS["event"]
 
-    # White-out the name area
+    # White-out only the name area
     x1, y1, x2, y2 = name_region["cover"]
     draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
 
-    # White-out the body paragraph area
-    x1, y1, x2, y2 = body_region["cover"]
+    # White-out only the event title area
+    x1, y1, x2, y2 = event_region["cover"]
     draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255, 255))
 
     # Composite the white overlay onto the template
@@ -215,20 +197,9 @@ def generate_certificate(participant, event_info, cert_id):
     name = participant.get("name", "Unknown Participant")
     _draw_name(draw, name, name_region)
 
-    # ── Draw body paragraph ────────────────────────────────────────────
-    college = participant.get("college", "Unknown College")
-    event_name = event_info.get("title", "Event")
-    fest_name = event_info.get("fest_name", "ZERO DAY")
-    date_str = event_info.get("date_str", "2026")
-
-    body_text = BODY_TEMPLATE.format(
-        college=college.upper(),
-        event=event_name.upper(),
-        fest=fest_name.upper(),
-        date=date_str.upper(),
-    )
-
-    _draw_body_paragraph(draw, body_text, body_region)
+    # ── Draw event title ───────────────────────────────────────────────
+    event_title = event_info.get("title", "EVENT")
+    _draw_event(draw, event_title, event_region)
 
     # ── Convert to RGB and export ──────────────────────────────────────
     img_rgb = img.convert("RGB")

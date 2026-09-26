@@ -55,10 +55,13 @@ jobs:
           path: data/
           key: cert-queue-event-${{ inputs.event_id }}
 
-      # ── Fetch attendees from API ─────────────────────────────────────
+      # ── Fetch attendees from DB ──────────────────────────────────────
       - name: 🔍 Fetch attendees from DB
         if: ${{ !inputs.retry_failed }}
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
         run: python generator/fetch_attendees.py --event-id ${{ inputs.event_id }}

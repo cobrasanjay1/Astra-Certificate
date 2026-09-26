@@ -27,7 +27,7 @@ TEMPLATE_HEIGHT = 1414
 FONTS = {
     "name": {
         "path": os.path.join(FONT_DIR, "LibreBaskerville-Regular.ttf"),
-        "size": 72,
+        "size": 78,
     },
     "body": {
         "path": os.path.join(FONT_DIR, "Montserrat-SemiBold.ttf"),
@@ -78,27 +78,26 @@ FALLBACK_FONTS = {
 #   3. Date area              — "ON {DATE}."
 
 TEXT_REGIONS = {
-    # The participant name — below "AWARDED TO" label
-    # "AWARDED TO" sits at roughly y=470, name starts at ~y=520
+    # Participant Name box & position (leaves "AWARDED TO" untouched at y=570-615)
     "name": {
-        "cover": (40, 460, 1700, 640),    # Cover "AWARDED TO" + old name area
-        "position": (90, 470),             # (x, y) — "AWARDED TO" label position
-        "name_position": (90, 520),        # Where the actual name text draws
-        "color": (30, 30, 30),             # near-black
-        "label_color": (60, 60, 60),       # lighter for "AWARDED TO"
+        "cover": (70, 650, 1600, 785),
+        "position": (75, 665),
+        "color": (30, 30, 30),
         "font_key": "name",
+        "font_size": 78,
         "max_width": 1500,
     },
 
-    # The body paragraph: "OF {COLLEGE}, FOR PARTICIPATING IN {EVENT}..."
-    # Must cover the entire old paragraph + old text near bottom
-    "body": {
-        "cover": (40, 650, 1700, 1060),    # Cover old body paragraph fully
-        "position": (90, 660),
-        "color": (40, 40, 40),
-        "font_key": "body",
-        "line_spacing": 38,
-        "max_width": 1500,
+    # Event Title box & position (replaces CYPHER DECODE with exact Montserrat-BoldItalic font & tracking)
+    "event": {
+        "cover": (1055, 852, 1495, 902),
+        "position": (1065, 864),
+        "color": (0, 0, 0),
+        "font_key": "body_italic",
+        "font_size": 27,
+        "tracking": 12.0,
+        "word_spacing": 25,
+        "max_width": 430,
     },
 }
 
@@ -112,7 +111,12 @@ BODY_TEMPLATE = (
     "ON  {date}."
 )
 
-# ── API Configuration ─────────────────────────────────────────────────────
+# ── Database & Supabase Configuration ─────────────────────────────────────
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+DATABASE_URL = os.environ.get("DATABASE_URL", os.environ.get("SUPABASE_DB_URL", ""))
+
+# Legacy API config (fallback)
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.astraietm.in")
 API_TOKEN = os.environ.get("API_TOKEN", "")
 

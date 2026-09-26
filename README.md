@@ -74,8 +74,9 @@ Trigger from the **Actions** tab → **Send Certificates** → **Run workflow**:
 
 | Secret | Description |
 |--------|-------------|
-| `API_BASE_URL` | Your API URL (e.g., `https://api.astraietm.in`) |
-| `API_TOKEN` | JWT token for a staff user |
+| `SUPABASE_URL` | Your Supabase Project URL (e.g., `https://xyz.supabase.co`) |
+| `SUPABASE_KEY` | Supabase Service Role Key or API Key |
+| `DATABASE_URL` | *(Optional)* Direct PostgreSQL connection string |
 | `RESEND_API_KEY` | Resend API key for sending emails |
 
 ## DNS Setup
