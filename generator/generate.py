@@ -109,33 +109,61 @@ def _draw_name(draw, name, region):
 
 
 def _tokenize_body(body_str):
+    """Tokenize the body template into (word, is_bold_italic) pairs.
+
+    '**word**' marks a bold-italic run (college/event/fest names).
+
+    Punctuation adjacency to a '**' boundary decides whether it attaches
+    to the neighboring word or stays a standalone token:
+      - Glued directly to the boundary, no space (e.g. "**DECODE**,")
+        -> attaches to the word inside the bold run: "DECODE,".
+      - A lone opening quote glued to a boundary from the outside
+        (e.g. "FEST '**ZERO**") -> attaches to the FIRST word of the
+        upcoming bold run instead of the word before it: "'ZERO".
+      - Separated from the boundary by a space (e.g. "**MANAGEMENT** ,")
+        -> stays a standalone token with normal spacing on both sides.
+    This exactly reproduces the reference template's punctuation
+    placement, inconsistencies included (see the BODY_TEMPLATE comment
+    in config.py).
+    """
     parts = body_str.split("**")
-    raw_tokens = []
+
+    # A lone opening quote glued to a '**' boundary (e.g. "FEST '**") -
+    # curly ('\u2018') or straight (') - belongs with the upcoming bold
+    # word, not the word before it.
+    for i in range(len(parts) - 1):
+        if parts[i].endswith(" \u2018"):
+            parts[i] = parts[i][:-1]
+            parts[i + 1] = "\u2018" + parts[i + 1]
+        elif parts[i].endswith(" '"):
+            parts[i] = parts[i][:-1]
+            parts[i + 1] = "'" + parts[i + 1]
+
+    # Punctuation that's allowed to merge onto a preceding word (covers
+    # both straight and curly quote styles, so either works in the template).
+    PURE_PUNCT = (",", ".", "',", "'.", "'", "\u2019,", "\u2019.", "\u2019")
+
+    raw_tokens = []  # (word, is_bi, glued_to_previous_part)
     for idx, part in enumerate(parts):
         is_bi = (idx % 2 == 1)
-        words = part.split(" ")
-        for w in words:
+        # True if this part's text touches the '**' boundary with no space.
+        glued = idx > 0 and part[:1] not in ("", " ")
+        for w in part.split(" "):
             if w:
-                raw_tokens.append((w, is_bi))
+                raw_tokens.append((w, is_bi, glued))
+                glued = False  # only the part's first word can be glued
 
     merged = []
-    for word, is_bi in raw_tokens:
-        if merged and word in [",", ".", "',", "'"]:
+    for word, is_bi, glued in raw_tokens:
+        if merged and glued and word in PURE_PUNCT:
             prev_word, prev_bi = merged.pop()
             merged.append((prev_word + word, prev_bi))
-        elif merged and word.startswith((",", ".", "'")):
-            punc = word[0]
-            rest = word[1:]
-            prev_word, prev_bi = merged.pop()
-            merged.append((prev_word + punc, prev_bi))
-            if rest:
-                merged.append((rest, is_bi))
         else:
             merged.append((word, is_bi))
     return merged
 
 
-def _measure_word_with_tracking(draw, word, font, tracking=11.5):
+def _measure_word_with_tracking(draw, word, font, tracking=9.0):
     """Measure total pixel width of a word rendered with letter tracking."""
     w = 0
     for char in word:
@@ -145,11 +173,33 @@ def _measure_word_with_tracking(draw, word, font, tracking=11.5):
     return w - tracking if word else 0
 
 
+def _draw_word(draw, x, y, word, font, tracking, color):
+    """Draw one word with per-character tracking.
+
+    Tracking is added strictly BETWEEN characters (n-1 gaps for n chars),
+    never after the last one. This is what makes the returned x position
+    match `_measure_word_with_tracking` exactly, so justified/word-spaced
+    layout math (computed with that function) matches what actually gets
+    painted pixel-for-pixel. (The previous implementation added a trailing
+    tracking after every word's last character without ever subtracting
+    it, so every inter-word gap was silently `tracking` px wider than
+    intended — the bug that made justified lines overshoot max_width.)
+    """
+    n = len(word)
+    for i, char in enumerate(word):
+        draw.text((int(round(x)), y), char, fill=color, font=font)
+        bbox = draw.textbbox((0, 0), char, font=font)
+        x += bbox[2] - bbox[0]
+        if i < n - 1:
+            x += tracking
+    return x
+
+
 def _draw_body(draw, participant, event_info, region):
     """Render the body paragraph with full justification to match the reference template.
 
     Each full line is stretched to max_width by distributing extra space evenly
-    across word gaps. The last (partial) line is left-aligned.
+    across word gaps. The last (partial) line uses normal (non-justified) spacing.
     """
     college = (participant.get("college") or "KMCT INSTITUTE OF EMERGING TECHNOLOGY AND MANAGEMENT").strip().upper()
     event = (event_info.get("title") or "CYPHER DECODE").strip().upper()
@@ -170,10 +220,10 @@ def _draw_body(draw, participant, event_info, region):
     font_bold_italic = _load_font_variant("bold_italic", font_size)
 
     x_start, y_start = region["position"]
-    max_w = region.get("max_width", 1430)
+    max_w = region.get("max_width", 1426)
     line_height = region.get("line_height", 51)
-    tracking = region.get("tracking", 13.0)
-    word_space = region.get("word_space", 26.0)
+    tracking = region.get("tracking", 9.0)
+    word_space = region.get("word_space", 22.0)
     color = region.get("color", (30, 30, 30))
 
     def word_px_width(word, font):
@@ -210,34 +260,21 @@ def _draw_body(draw, participant, event_info, region):
     for line_idx, line_tokens in enumerate(lines):
         is_last = (line_idx == len(lines) - 1)
         y = y_start + line_idx * line_height
+        n_gaps = len(line_tokens) - 1
 
-        if len(line_tokens) <= 1 or is_last:
-            # Left-align (last line or single word)
-            x = x_start
-            for word, is_bi in line_tokens:
-                font = font_bold_italic if is_bi else font_reg
-                for char in word:
-                    draw.text((x, y), char, fill=color, font=font)
-                    bbox = draw.textbbox((0, 0), char, font=font)
-                    x += (bbox[2] - bbox[0]) + tracking
-                x += word_space
+        if n_gaps <= 0 or is_last:
+            gap = word_space
         else:
-            # Full justify: distribute remaining space across word gaps
-            # Measure total word widths on this line
             total_word_w = sum(word_px_width(w, font_bold_italic if bi else font_reg)
                                for w, bi in line_tokens)
-            n_gaps = len(line_tokens) - 1
-            justify_space = (max_w - total_word_w) / n_gaps if n_gaps > 0 else word_space
+            gap = (max_w - total_word_w) / n_gaps
 
-            x = float(x_start)
-            for wi, (word, is_bi) in enumerate(line_tokens):
-                font = font_bold_italic if is_bi else font_reg
-                for char in word:
-                    draw.text((int(x), y), char, fill=color, font=font)
-                    bbox = draw.textbbox((0, 0), char, font=font)
-                    x += (bbox[2] - bbox[0]) + tracking
-                if wi < n_gaps:
-                    x += justify_space
+        x = float(x_start)
+        for wi, (word, is_bi) in enumerate(line_tokens):
+            font = font_bold_italic if is_bi else font_reg
+            x = _draw_word(draw, x, y, word, font, tracking, color)
+            if wi < n_gaps:
+                x += gap
 
 
 
@@ -490,4 +527,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

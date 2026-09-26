@@ -96,9 +96,15 @@ TEXT_REGIONS = {
     },
 
     # Full Body paragraph region (covers and re-types the entire paragraph below the name)
-    # Calibrated: CanvaSans size=32 → glyph h=25px (matches reference).
-    # tracking=13, word_space=26 → matches reference character spacing.
-    # max_width=1600 → produces exactly 5 lines matching the reference template.
+    # Calibrated against the reference template by direct pixel measurement:
+    #   - CanvaSans-Medium size=32 -> cap-height 25px, matching the reference
+    #     ("OCTOBER" glyph bbox is exactly y=1020..1045 in the reference).
+    #   - tracking=9.0, word_space=22.0 -> the unjustified last line
+    #     ("ON 6 OCTOBER 2026.") renders at 477px, matching the reference
+    #     exactly, AND these values reproduce the reference's exact 5-line
+    #     word-wrap grouping (7 / 7 / 11 / 6 / 4 tokens per line).
+    #   - max_width=1426 -> matches the reference's justified line width
+    #     (measured 1425-1427px across all 4 full lines).
     # Position y=805 → CanvaSans bbox top-offset=11 → glyph starts at y=816 (reference).
     "body": {
         "cover": (60, 800, 1700, 1060),
@@ -106,9 +112,9 @@ TEXT_REGIONS = {
         "color": (30, 30, 30),
         "font_size": 32,
         "line_height": 51,
-        "tracking": 13.0,
-        "word_space": 26.0,
-        "max_width": 1600,
+        "tracking": 9.0,
+        "word_space": 22.0,
+        "max_width": 1426,
     },
 
 
@@ -117,9 +123,17 @@ TEXT_REGIONS = {
 # ── Body Paragraph Template ───────────────────────────────────────────────
 # The paragraph below the name. Placeholders are replaced with actual values.
 # Words wrapped in ** are rendered in CanvaSans-BoldItalic (college/event/fest names).
+#
+# Punctuation spacing rule (matches the reference template exactly, including
+# its one inconsistency): punctuation glued directly to a ** boundary with no
+# space (e.g. "**{event}**,") attaches to the neighboring word with no gap
+# ("DECODE,"). Punctuation separated from a ** boundary by a space (e.g.
+# "**{college}** ,") stays a standalone word with normal spacing on both
+# sides ("MANAGEMENT , FOR") — this is exactly how the reference renders it.
+# Do not "fix" that inconsistency; it's what the reference actually shows.
 BODY_TEMPLATE = (
-    "OF **{college}**, FOR PARTICIPATING IN **{event}**, "
-    "HELD AS PART OF THE FEST '**{fest}**', OF DEPARTMENT OF "
+    "OF **{college}** , FOR PARTICIPATING IN **{event}**, "
+    "HELD AS PART OF THE FEST \u2018**{fest}**\u2019, OF DEPARTMENT OF "
     "COMPUTER SCIENCE AND ENGINEERING (CYBER SECURITY), "
     "ON {date}."
 )
