@@ -512,12 +512,20 @@ def build_site(manifest_path):
         else:
             logger.warning(f"⚠️  Certificate PNG not found: {src}")
 
+        # Each certificate stores its own event title/date. This is
+        # especially important when building the unified all-events manifest.
+        cert_event = dict(event)
+        if cert.get("event"):
+            cert_event["title"] = cert["event"]
+        if cert.get("date"):
+            cert_event["date_str"] = cert["date"]
+
         # Create verify page: site/verify/CERT-2026-XXXX/index.html
         page_dir = os.path.join(verify_dir, cert_id)
         os.makedirs(page_dir, exist_ok=True)
         page_path = os.path.join(page_dir, "index.html")
         with open(page_path, "w") as f:
-            f.write(_verify_page_html(cert, event))
+            f.write(_verify_page_html(cert, cert_event))
 
     # 4. CNAME file for GitHub Pages
     cname_path = os.path.join(SITE_DIR, "CNAME")
