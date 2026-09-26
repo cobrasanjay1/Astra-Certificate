@@ -491,9 +491,9 @@ def generate_all_events():
 def generate_test():
     """Generate a single test certificate with sample data matching the reference."""
     participant = {
-        "name": "Midlaj Jaleel",
-        "email": "midlaj@example.com",
-        "college": "KMCT INSTITUTE OF EMERGING TECHNOLOGY AND MANAGEMENT",
+        "name": "Test",
+        "email": "test@example.com",
+        "college": "test",
     }
     event_info = {
         "title": "CYPHER DECODE",
