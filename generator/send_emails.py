@@ -79,6 +79,34 @@ def _fetch_event_title_from_db(event_id):
     return None
 
 
+def _mark_certificate_sent(registration_id):
+    """Persist successful certificate delivery in events_registration."""
+    if not registration_id or not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing registration_id or Supabase credentials")
+
+    from supabase import create_client
+
+    client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    response = (
+        client.table("events_registration")
+        .update({
+            "certificate_sent": True,
+            "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("id", registration_id)
+        .eq("certificate_sent", False)
+        .select("id, certificate_sent, certificate_sent_at")
+        .execute()
+    )
+
+    if not response.data:
+        raise RuntimeError(
+            f"Could not mark registration {registration_id} as certificate_sent"
+        )
+
+    return response.data[0]
+
+
 # ── Email HTML Builder ────────────────────────────────────────────────────
 
 def _build_email_html(participant, event, cert_id):
@@ -191,7 +219,7 @@ class EmailQueue:
         with open(self.queue_file, "w") as f:
             json.dump(data, f, indent=2)
 
-    def add(self, cert_id, email, name, cert_filepath, event, participant):
+    def add(self, cert_id, email, name, cert_filepath, event, participant, registration_id=None):
         """Add an item to the queue (skip if already exists)."""
         # Check for duplicates by cert_id
         existing = next((i for i in self.items if i["cert_id"] == cert_id), None)
@@ -203,6 +231,7 @@ class EmailQueue:
             "email": email,
             "name": name,
             "cert_filepath": cert_filepath,
+            "registration_id": registration_id,
             "event": event,
             "participant": participant,
             "status": STATUS_PENDING,
@@ -379,8 +408,16 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
         success, resend_id, error = _send_single(item, dry_run=dry_run)
 
         if success:
-            queue.mark_sent(cert_id, resend_id=resend_id)
-            logger.info(f"  ✅ Sent! (id={resend_id})")
+            try:
+                _mark_certificate_sent(item.get("registration_id"))
+            except Exception as db_error:
+                # Do not mark the queue item SENT if the DB state was not updated.
+                # The next run can safely retry it.
+                queue.mark_failed(cert_id, f"DB update failed: {db_error}", max_retries)
+                logger.error(f"  ❌ Email sent, but DB update failed: {db_error}")
+            else:
+                queue.mark_sent(cert_id, resend_id=resend_id)
+                logger.info(f"  ✅ Sent and marked certificate_sent=true (id={resend_id})")
         else:
             queue.mark_failed(cert_id, error, max_retries)
             logger.warning(f"  ❌ Failed: {error}")
@@ -400,8 +437,23 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                     success, resend_id, error = _send_single(item, dry_run=dry_run)
 
                     if success:
-                        queue.mark_sent(cert_id, resend_id=resend_id)
-                        logger.info(f"  ✅ Sent on retry! (id={resend_id})")
+                        try:
+                            _mark_certificate_sent(item.get("registration_id"))
+                        except Exception as db_error:
+                            queue.mark_failed(
+                                cert_id,
+                                f"DB update failed: {db_error}",
+                                max_retries,
+                            )
+                            logger.error(
+                                f"  ❌ Email sent, but DB update failed: {db_error}"
+                            )
+                        else:
+                            queue.mark_sent(cert_id, resend_id=resend_id)
+                            logger.info(
+                                f"  ✅ Sent on retry and marked certificate_sent=true "
+                                f"(id={resend_id})"
+                            )
                         break
                     else:
                         queue.mark_failed(cert_id, error, max_retries)
@@ -502,6 +554,15 @@ def init_queue_from_manifest(manifest_path, queue_file):
         if cert.get("date"):
             cert_event["date_str"] = cert["date"]
 
+        # The database is the source of truth for delivery state.
+        # Sent registrations are not added to the retry queue.
+        if cert.get("certificate_sent", False):
+            logger.info(
+                "⏭️ Skipping %s: certificate already marked sent in DB",
+                cert_id,
+            )
+            continue
+
         queue.add(
             cert_id=cert_id,
             email=cert.get("email", ""),
@@ -509,6 +570,7 @@ def init_queue_from_manifest(manifest_path, queue_file):
             cert_filepath=cert_filepath,
             event=cert_event,
             participant=participant,
+            registration_id=cert.get("registration_id"),
         )
 
     logger.info(f"📋 Queue initialized: {len(certificates)} certificates")
