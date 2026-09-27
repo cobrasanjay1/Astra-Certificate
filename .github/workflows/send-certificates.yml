@@ -61,7 +61,6 @@ jobs:
           fi
 
       - name: 🎨 Generate certificates
-        if: ${{ inputs.retry_failed == false }}
         env:
           FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
@@ -87,7 +86,7 @@ jobs:
           fi
 
       - name: 🚀 Deploy verification site
-        if: ${{ inputs.dry_run == false && inputs.retry_failed == false }}
+        if: ${{ inputs.dry_run == false }}
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
