@@ -422,6 +422,8 @@ def generate_batch(data_file=None, event_id=None, start_index=1):
             "name": participant["name"],
             "email": participant["email"],
             "college": participant["college"],
+            "registration_id": attendee.get("registration_id"),
+            "certificate_sent": bool(attendee.get("certificate_sent", False)),
             "event_id": event_info.get("id", ""),
             "event": event_info.get("title", ""),
             "date": event_info.get("date_str", ""),
