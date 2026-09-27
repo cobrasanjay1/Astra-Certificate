@@ -13,11 +13,6 @@ on:
         required: false
         default: true
         type: boolean
-      retry_failed:
-        description: "Retry only previously failed certificate emails."
-        required: false
-        default: false
-        type: boolean
       max_retries:
         description: "Maximum email attempts per participant."
         required: false
@@ -49,17 +44,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r generator/requirements.txt
 
-      - name: 📂 Restore previous queue
-        if: ${{ inputs.retry_failed == true }}
-        uses: actions/cache/restore@v4
-        with:
-          path: data/
-          key: cert-queue-${{ inputs.event_id || 'all' }}
-          restore-keys: |
-            cert-queue-${{ inputs.event_id || 'all' }}-
-
       - name: 🔍 Fetch attended participants
-        if: ${{ inputs.retry_failed == false }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -89,7 +74,7 @@ jobs:
           fi
 
       - name: 🌐 Build verification site
-        if: ${{ inputs.dry_run == false && inputs.retry_failed == false }}
+        if: ${{ inputs.dry_run == false }}
         env:
           FEST_NAME: ${{ secrets.FEST_NAME }}
         run: |
@@ -132,20 +117,8 @@ jobs:
             EVENT_ARGS="$EVENT_ARGS --dry-run"
           fi
 
-          if [ "${{ inputs.retry_failed }}" = "true" ]; then
-            EVENT_ARGS="$EVENT_ARGS --retry-failed"
-          elif [ -f "$QUEUE_FILE" ]; then
-            EVENT_ARGS="$EVENT_ARGS --resume"
-          fi
-
+          # Supabase events_registration.certificate_sent is the source of truth.
           python generator/send_emails.py $EVENT_ARGS --max-retries "${{ inputs.max_retries }}"
-
-      - name: 💾 Save queue state
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: data/
-          key: cert-queue-${{ inputs.event_id || 'all' }}-${{ github.run_number }}
 
       - name: 📊 Print queue summary
         if: always()
@@ -157,7 +130,7 @@ jobs:
           fi
 
       - name: 📤 Upload certificates
-        if: ${{ always() && inputs.retry_failed == false }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: certificates-${{ inputs.event_id || 'all-events' }}-run-${{ github.run_number }}
@@ -165,7 +138,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: 📤 Upload generated data and queue
+      - name: 📤 Upload generated data
         if: always()
         uses: actions/upload-artifact@v4
         with:
