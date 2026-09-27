@@ -195,7 +195,9 @@ def fetch_attended_registrations(client, event_id=None):
             f"{REG_USER_ID_COL},"
             f"{REG_EVENT_ID_COL},"
             f"{REG_COLLEGE_COL},"
-            f"{REG_STATUS_COL}"
+            f"{REG_STATUS_COL},"
+            "certificate_sent,"
+            "certificate_sent_at"
         ),
         filters=filters,
     )
@@ -310,6 +312,8 @@ def build_event_batches(registrations, users_by_id, events_by_id):
         batch["attendees"].append(
             {
                 "registration_id": registration_id,
+                "certificate_sent": bool(registration.get("certificate_sent", False)),
+                "certificate_sent_at": registration.get("certificate_sent_at"),
                 "full_name": get_user_name(user),
                 "email": (user.get(USER_EMAIL_COL) or "").strip(),
                 "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
