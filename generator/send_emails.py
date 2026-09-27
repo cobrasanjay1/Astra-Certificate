@@ -408,16 +408,20 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
         success, resend_id, error = _send_single(item, dry_run=dry_run)
 
         if success:
-            try:
-                _mark_certificate_sent(item.get("registration_id"))
-            except Exception as db_error:
-                # Do not mark the queue item SENT if the DB state was not updated.
-                # The next run can safely retry it.
-                queue.mark_failed(cert_id, f"DB update failed: {db_error}", max_retries)
-                logger.error(f"  ❌ Email sent, but DB update failed: {db_error}")
-            else:
+            if dry_run:
                 queue.mark_sent(cert_id, resend_id=resend_id)
-                logger.info(f"  ✅ Sent and marked certificate_sent=true (id={resend_id})")
+                logger.info(f"  🧪 Dry run: {cert_id} not written to database")
+            else:
+                try:
+                    _mark_certificate_sent(item.get("registration_id"))
+                except Exception as db_error:
+                    # Do not mark the queue item SENT if the DB state was not updated.
+                    # The next run can safely retry it.
+                    queue.mark_failed(cert_id, f"DB update failed: {db_error}", max_retries)
+                    logger.error(f"  ❌ Email sent, but DB update failed: {db_error}")
+                else:
+                    queue.mark_sent(cert_id, resend_id=resend_id)
+                    logger.info(f"  ✅ Sent and marked certificate_sent=true (id={resend_id})")
         else:
             queue.mark_failed(cert_id, error, max_retries)
             logger.warning(f"  ❌ Failed: {error}")
@@ -437,23 +441,27 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                     success, resend_id, error = _send_single(item, dry_run=dry_run)
 
                     if success:
-                        try:
-                            _mark_certificate_sent(item.get("registration_id"))
-                        except Exception as db_error:
-                            queue.mark_failed(
-                                cert_id,
-                                f"DB update failed: {db_error}",
-                                max_retries,
-                            )
-                            logger.error(
-                                f"  ❌ Email sent, but DB update failed: {db_error}"
-                            )
-                        else:
+                        if dry_run:
                             queue.mark_sent(cert_id, resend_id=resend_id)
-                            logger.info(
-                                f"  ✅ Sent on retry and marked certificate_sent=true "
-                                f"(id={resend_id})"
-                            )
+                            logger.info(f"  🧪 Dry run: {cert_id} not written to database")
+                        else:
+                            try:
+                                _mark_certificate_sent(item.get("registration_id"))
+                            except Exception as db_error:
+                                queue.mark_failed(
+                                    cert_id,
+                                    f"DB update failed: {db_error}",
+                                    max_retries,
+                                )
+                                logger.error(
+                                    f"  ❌ Email sent, but DB update failed: {db_error}"
+                                )
+                            else:
+                                queue.mark_sent(cert_id, resend_id=resend_id)
+                                logger.info(
+                                    f"  ✅ Sent on retry and marked certificate_sent=true "
+                                    f"(id={resend_id})"
+                                )
                         break
                     else:
                         queue.mark_failed(cert_id, error, max_retries)
