@@ -67,6 +67,13 @@ REG_COLLEGE_COL = "college"
 REG_STATUS_COL = "status"
 REG_ATTENDED_COL = "is_used"
 
+PARTICIPANTS_TABLE = "events_registrationparticipant"
+PARTICIPANT_ID_COL = "id"
+PARTICIPANT_REG_ID_COL = "registration_id"
+PARTICIPANT_NAME_COL = "name"
+PARTICIPANT_EMAIL_COL = "email"
+PARTICIPANT_LEADER_COL = "is_leader"
+
 EVENTS_TABLE = "events_event"
 EVENT_ID_COL = "id"
 EVENT_TITLE_COL = "title"
@@ -243,6 +250,19 @@ def fetch_events(client, event_ids):
         if row.get(EVENT_ID_COL) is not None
     }
 
+def fetch_participants(client, registration_ids):
+    return {
+        row.get(PARTICIPANT_REG_ID_COL): row
+        for row in fetch_rows_by_ids(
+            client,
+            PARTICIPANTS_TABLE,
+            f"{PARTICIPANT_ID_COL},{PARTICIPANT_REG_ID_COL},{PARTICIPANT_NAME_COL},{PARTICIPANT_EMAIL_COL},{PARTICIPANT_LEADER_COL},certificate_sent,certificate_sent_at",
+            PARTICIPANT_REG_ID_COL,
+            registration_ids,
+        )
+        if row.get(PARTICIPANT_REG_ID_COL) is not None
+    }
+
 
 # ---------------------------------------------------------------------------
 # Transformation
@@ -276,7 +296,7 @@ def get_user_name(user):
     return " ".join(part for part in (first, last) if part) or "Participant"
 
 
-def build_event_batches(registrations, users_by_id, events_by_id):
+def build_event_batches(registrations, users_by_id, events_by_id, participants_by_registration):
     """
     Convert DB rows into the JSON structure expected by generate.py.
 
@@ -309,16 +329,34 @@ def build_event_batches(registrations, users_by_id, events_by_id):
             },
         )
 
-        batch["attendees"].append(
-            {
-                "registration_id": registration_id,
-                "certificate_sent": bool(registration.get("certificate_sent", False)),
-                "certificate_sent_at": registration.get("certificate_sent_at"),
-                "full_name": get_user_name(user),
-                "email": (user.get(USER_EMAIL_COL) or "").strip(),
-                "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
-            }
-        )
+        participant_rows = participants_by_registration.get(registration_id, [])
+        if participant_rows:
+            for participant in participant_rows:
+                batch["attendees"].append(
+                    {
+                        "participant_id": participant.get(PARTICIPANT_ID_COL),
+                        "registration_id": registration_id,
+                        "certificate_sent": bool(participant.get("certificate_sent", False)),
+                        "certificate_sent_at": participant.get("certificate_sent_at"),
+                        "full_name": (participant.get(PARTICIPANT_NAME_COL) or "Participant").strip(),
+                        "email": (participant.get(PARTICIPANT_EMAIL_COL) or "").strip(),
+                        "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+                    }
+                )
+        else:
+            # Backward compatibility for registrations created before the
+            # participant table existed.
+            batch["attendees"].append(
+                {
+                    "participant_id": None,
+                    "registration_id": registration_id,
+                    "certificate_sent": bool(registration.get("certificate_sent", False)),
+                    "certificate_sent_at": registration.get("certificate_sent_at"),
+                    "full_name": get_user_name(user),
+                    "email": (user.get(USER_EMAIL_COL) or "").strip(),
+                    "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+                }
+            )
 
     result = list(batches.values())
 
@@ -373,7 +411,12 @@ def fetch_all(event_id=None, title=None, supabase_url=None, supabase_key=None):
             )
         ]
 
-    batches = build_event_batches(registrations, users_by_id, events_by_id)
+    participants_by_registration = fetch_participants(client, [row.get(REG_ID_COL) for row in registrations])
+    participants_grouped = {}
+    for participant in participants_by_registration.values():
+        participants_grouped.setdefault(participant.get(PARTICIPANT_REG_ID_COL), []).append(participant)
+
+    batches = build_event_batches(registrations, users_by_id, events_by_id, participants_grouped)
 
     for batch in batches:
         event = batch["event"]
