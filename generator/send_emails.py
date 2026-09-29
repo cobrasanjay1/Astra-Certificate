@@ -79,32 +79,50 @@ def _fetch_event_title_from_db(event_id):
     return None
 
 
-def _mark_certificate_sent(registration_id):
-    """Persist successful certificate delivery in events_registration."""
-    if not registration_id or not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Missing registration_id or Supabase credentials")
+def _mark_certificate_sent(participant_id=None, registration_id=None):
+    """Persist successful certificate delivery for the individual recipient."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase credentials")
+    if not participant_id and not registration_id:
+        raise RuntimeError("Missing participant_id or registration_id")
 
     from supabase import create_client
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    response = (
-        client.table("events_registration")
-        .update({
-            "certificate_sent": True,
-            "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
-        })
-        .eq("id", registration_id)
-        .eq("certificate_sent", False)
-        .select("id, certificate_sent, certificate_sent_at")
-        .execute()
-    )
-
-    if not response.data:
-        raise RuntimeError(
-            f"Could not mark registration {registration_id} as certificate_sent"
+    if participant_id:
+        response = (
+            client.table("events_registrationparticipant")
+            .update({
+                "certificate_sent": True,
+                "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", participant_id)
+            .eq("certificate_sent", False)
+            .select("id, registration_id, certificate_sent, certificate_sent_at")
+            .execute()
         )
+        if response.data:
+            return response.data[0]
 
-    return response.data[0]
+    # Backward compatibility for older registrations without participant rows.
+    if registration_id:
+        response = (
+            client.table("events_registration")
+            .update({
+                "certificate_sent": True,
+                "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", registration_id)
+            .eq("certificate_sent", False)
+            .select("id, certificate_sent, certificate_sent_at")
+            .execute()
+        )
+        if response.data:
+            return response.data[0]
+
+    raise RuntimeError(
+        f"Could not mark certificate sent for participant {participant_id or registration_id}"
+    )
 
 
 # ── Email HTML Builder ────────────────────────────────────────────────────
@@ -219,7 +237,7 @@ class EmailQueue:
         with open(self.queue_file, "w") as f:
             json.dump(data, f, indent=2)
 
-    def add(self, cert_id, email, name, cert_filepath, event, participant, registration_id=None):
+    def add(self, cert_id, email, name, cert_filepath, event, participant, registration_id=None, participant_id=None):
         """Add an item to the queue (skip if already exists)."""
         # Check for duplicates by cert_id
         existing = next((i for i in self.items if i["cert_id"] == cert_id), None)
@@ -413,7 +431,7 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                 logger.info(f"  🧪 Dry run: {cert_id} not written to database")
             else:
                 try:
-                    _mark_certificate_sent(item.get("registration_id"))
+                    _mark_certificate_sent(item.get("participant_id"), item.get("registration_id"))
                 except Exception as db_error:
                     # Do not mark the queue item SENT if the DB state was not updated.
                     # The next run can safely retry it.
@@ -579,6 +597,7 @@ def init_queue_from_manifest(manifest_path, queue_file):
             event=cert_event,
             participant=participant,
             registration_id=cert.get("registration_id"),
+            participant_id=cert.get("participant_id"),
         )
 
     logger.info(f"📋 Queue initialized: {len(certificates)} certificates")
