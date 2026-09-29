@@ -409,7 +409,7 @@ def fetch_all(event_id=None, title=None, supabase_url=None, supabase_key=None):
 
     participants_by_registration = fetch_participants(client, [row.get(REG_ID_COL) for row in registrations])
     participants_grouped = {}
-    for participant in participants_by_registration.values():
+    for participant in participants_by_registration:
         participants_grouped.setdefault(participant.get(PARTICIPANT_REG_ID_COL), []).append(participant)
 
     batches = build_event_batches(registrations, users_by_id, events_by_id, participants_grouped)
