@@ -103,6 +103,9 @@ def _mark_certificate_sent(participant_id=None, registration_id=None):
         )
         if response.data:
             return response.data[0]
+        raise RuntimeError(
+            f"Could not mark participant {participant_id} as certificate_sent"
+        )
 
     # Backward compatibility for older registrations without participant rows.
     if registration_id:
