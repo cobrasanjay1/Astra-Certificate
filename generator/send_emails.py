@@ -250,6 +250,7 @@ class EmailQueue:
             "name": name,
             "cert_filepath": cert_filepath,
             "registration_id": registration_id,
+            "participant_id": participant_id,
             "event": event,
             "participant": participant,
             "status": STATUS_PENDING,
