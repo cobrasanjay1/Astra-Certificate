@@ -251,17 +251,13 @@ def fetch_events(client, event_ids):
     }
 
 def fetch_participants(client, registration_ids):
-    return {
-        row.get(PARTICIPANT_REG_ID_COL): row
-        for row in fetch_rows_by_ids(
-            client,
-            PARTICIPANTS_TABLE,
-            f"{PARTICIPANT_ID_COL},{PARTICIPANT_REG_ID_COL},{PARTICIPANT_NAME_COL},{PARTICIPANT_EMAIL_COL},{PARTICIPANT_LEADER_COL},certificate_sent,certificate_sent_at",
-            PARTICIPANT_REG_ID_COL,
-            registration_ids,
-        )
-        if row.get(PARTICIPANT_REG_ID_COL) is not None
-    }
+    return fetch_rows_by_ids(
+        client,
+        PARTICIPANTS_TABLE,
+        f"{PARTICIPANT_ID_COL},{PARTICIPANT_REG_ID_COL},{PARTICIPANT_NAME_COL},{PARTICIPANT_EMAIL_COL},{PARTICIPANT_LEADER_COL},certificate_sent,certificate_sent_at",
+        PARTICIPANT_REG_ID_COL,
+        registration_ids,
+    )
 
 
 # ---------------------------------------------------------------------------
