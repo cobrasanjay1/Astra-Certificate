@@ -201,7 +201,9 @@ def _draw_body(draw, participant, event_info, region):
     Each full line is stretched to max_width by distributing extra space evenly
     across word gaps. The last (partial) line uses normal (non-justified) spacing.
     """
-    college = (participant.get("college") or "KMCT INSTITUTE OF EMERGING TECHNOLOGY AND MANAGEMENT").strip().upper()
+    # College is supplied per participant from events_registration.college by fetch_attendees.py.
+    # Do not silently substitute KMCT when the DB value is missing.
+    college = (participant.get("college") or "N/A").strip().upper()
     event = (event_info.get("title") or "CYPHER DECODE").strip().upper()
     fest = (event_info.get("fest_name") or "ZERO DAY").strip().upper()
     date = (participant.get("date") or event_info.get("date_str") or "6 OCTOBER 2026").strip().upper()
