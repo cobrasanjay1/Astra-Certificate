@@ -63,14 +63,25 @@ Queue state is saved to `data/all_queue.json` (or `data/event_{id}_queue.json` f
 
 ## GitHub Action
 
-Trigger from the **Actions** tab → **Send Certificates** → **Run workflow**:
+Trigger from the **Actions** tab → **Send Certificates** → **Run workflow**.
 
-| Input | Description |
-|-------|-------------|
-| `event_id` | Event ID from your database |
-| `dry_run` | Generate without sending emails |
-| `retry_failed` | Retry only previously failed emails |
-| `max_retries` | Max send attempts per email (default: 3) |
+It is a two-step flow so you choose the events *before* anything is sent:
+
+1. **Run with `mode = list`** — reads `events_event` from Supabase and prints a table
+   (ID, title, date, attended / sent / pending) in the run summary. Nothing is generated or emailed.
+2. **Run with `mode = send`** and put the IDs you want in `events` (e.g. `3,7`, or `all`).
+   The selection is validated first; an empty, malformed or unknown selection stops the run
+   before any certificate is generated.
+
+| Input          | Description                                                                 |
+| -------------- | --------------------------------------------------------------------------- |
+| `mode`         | `list` = show events only, `send` = process the selected events             |
+| `events`       | `send` only. Event IDs, comma-separated (`3,7`), or `all`. Blank is rejected |
+| `dry_run`      | Generate without sending emails or deploying the site (default: on)         |
+| `max_retries`  | Max send attempts per email (default: 3)                                    |
+
+Re-running an event is safe: `certificate_sent` in Supabase is the source of truth, so people who
+already received their certificate are skipped. Runs are serialized so two sends can never overlap.
 
 ### Required Secrets
 
@@ -102,6 +113,7 @@ Astra-Certificate/
 │   ├── config.py                # Configuration (positions, fonts, API)
 │   ├── generate.py              # Certificate image generator (Pillow)
 │   ├── fetch_attendees.py       # Fetch attendees from API
+│   ├── list_events.py           # List events from DB + validate event selection
 │   ├── send_emails.py           # Email queue with retry logic
 │   ├── build_site.py            # Verification site builder
 │   ├── requirements.txt         # Python dependencies
