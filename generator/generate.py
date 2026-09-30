@@ -299,15 +299,41 @@ def generate_certificate(participant, event_info, cert_id):
     if not os.path.exists(TEMPLATE_FILE):
         raise FileNotFoundError(f"Template not found: {TEMPLATE_FILE}")
 
-    img = Image.open(TEMPLATE_FILE).convert("RGBA")
+    try:
+        img = Image.open(TEMPLATE_FILE).convert("RGBA")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to open certificate template '{TEMPLATE_FILE}'. "
+            "Use a valid PNG/JPEG/WebP image."
+        ) from exc
+
+    # The reference coordinates are calibrated for 1536×1086. Scale all
+    # placement values when a newly uploaded template has a different size.
+    sx = img.width / TEMPLATE_WIDTH
+    sy = img.height / TEMPLATE_HEIGHT
+    sf = (sx + sy) / 2
+
+    def scale_region(region):
+        scaled = dict(region)
+        x1, y1, x2, y2 = region["cover"]
+        px, py = region["position"]
+        scaled["cover"] = (
+            round(x1 * sx), round(y1 * sy),
+            round(x2 * sx), round(y2 * sy),
+        )
+        scaled["position"] = (round(px * sx), round(py * sy))
+        for key in ("font_size", "max_width", "line_height", "tracking", "word_space"):
+            if key in region:
+                scaled[key] = region[key] * sf
+        return scaled
 
     # Create a drawing overlay (so we can composite with transparency)
     overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
     draw_overlay = ImageDraw.Draw(overlay)
 
     # ── Cover dynamic text regions with white ──────────────────────────
-    name_region = TEXT_REGIONS["name"]
-    body_region = TEXT_REGIONS["body"]
+    name_region = scale_region(TEXT_REGIONS["name"])
+    body_region = scale_region(TEXT_REGIONS["body"])
 
     # White-out the name area
     x1, y1, x2, y2 = name_region["cover"]
