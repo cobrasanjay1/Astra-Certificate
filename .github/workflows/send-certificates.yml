@@ -3,13 +3,21 @@ name: 🎓 Send Certificates
 on:
   workflow_dispatch:
     inputs:
-      event_id:
-        description: "Database event ID from events_event.id. Leave blank for all events."
+      mode:
+        description: "list = only show the events in the database (nothing is generated or sent). send = process the events chosen below."
+        required: true
+        default: list
+        type: choice
+        options:
+          - list
+          - send
+      events:
+        description: "mode=send only. Event IDs, comma-separated (e.g. 3,7), or 'all'. Run mode=list first to see the IDs."
         required: false
         default: ""
         type: string
       dry_run:
-        description: "Generate certificates and build the queue without sending emails or deploying."
+        description: "Generate certificates without sending emails or deploying the verification site."
         required: false
         default: true
         type: boolean
@@ -18,13 +26,49 @@ on:
         required: false
         default: "3"
         type: string
+
 permissions:
   contents: write
   pages: write
   id-token: write
 
+# Never let two sends overlap - that is how people get duplicate certificates.
+concurrency:
+  group: send-certificates
+  cancel-in-progress: false
+
 jobs:
-  generate-and-send:
+  # 1. Always: read the events from the database and show them.
+  list-events:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: generator/requirements.txt
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r generator/requirements.txt
+
+      - name: 📋 List events from the database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python generator/list_events.py --summary
+
+  # 2. mode=send only: validate the chosen events, then generate + send.
+  send:
+    needs: list-events
+    if: ${{ inputs.mode == 'send' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -44,49 +88,55 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r generator/requirements.txt
 
+      - name: ✅ Validate selected events
+        id: select
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EVENTS_INPUT: ${{ inputs.events }}
+        run: python generator/list_events.py --select "$EVENTS_INPUT"
+
       - name: 🔍 Fetch attended participants
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           FEST_NAME: ${{ secrets.FEST_NAME }}
+          EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
           set -e
-
-          if [ -n "${{ inputs.event_id }}" ]; then
-            echo "Fetching attended participants for event ID: ${{ inputs.event_id }}"
-            python generator/fetch_attendees.py --event-id "${{ inputs.event_id }}"
-          else
-            echo "Fetching attended participants for ALL events"
-            python generator/fetch_attendees.py --all-events
-          fi
+          for id in $EVENT_IDS; do
+            echo "::group::Fetch event $id"
+            python generator/fetch_attendees.py --event-id "$id"
+            echo "::endgroup::"
+          done
 
       - name: 🎨 Generate certificates
         env:
           FEST_NAME: ${{ secrets.FEST_NAME }}
+          EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
           set -e
-
-          if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/generate.py --event-id "${{ inputs.event_id }}"
-          else
-            python generator/generate.py --all-events
-          fi
+          for id in $EVENT_IDS; do
+            echo "::group::Generate event $id"
+            python generator/generate.py --event-id "$id"
+            echo "::endgroup::"
+          done
 
       - name: 🌐 Build verification site
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ !inputs.dry_run }}
         env:
           FEST_NAME: ${{ secrets.FEST_NAME }}
+          EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
           set -e
-
-          if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/build_site.py --event-id "${{ inputs.event_id }}"
-          else
-            python generator/build_site.py --all-events
-          fi
+          for id in $EVENT_IDS; do
+            echo "::group::Build site for event $id"
+            python generator/build_site.py --event-id "$id"
+            echo "::endgroup::"
+          done
 
       - name: 🚀 Deploy verification site
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ !inputs.dry_run }}
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -101,38 +151,44 @@ jobs:
           CERT_VERIFY_BASE_URL: https://cert.astraietm.in
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EVENT_IDS: ${{ steps.select.outputs.ids }}
+          MAX_RETRIES: ${{ inputs.max_retries }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          set -e
+          [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || { echo "max_retries must be a number"; exit 1; }
 
-          if [ -n "${{ inputs.event_id }}" ]; then
-            QUEUE_FILE="data/event_${{ inputs.event_id }}_queue.json"
-            EVENT_ARGS="--event-id ${{ inputs.event_id }}"
-          else
-            QUEUE_FILE="data/all_queue.json"
-            EVENT_ARGS="--all-events"
+          ARGS=(--max-retries "$MAX_RETRIES")
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
           fi
 
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            EVENT_ARGS="$EVENT_ARGS --dry-run"
-          fi
-
-          # Supabase events_registration.certificate_sent is the source of truth.
-          python generator/send_emails.py $EVENT_ARGS --max-retries "${{ inputs.max_retries }}"
+          # Supabase certificate_sent is the source of truth, so re-running an
+          # event never re-sends to someone who already got their certificate.
+          # One event failing must not stop the others - report at the end.
+          failed=0
+          for id in $EVENT_IDS; do
+            echo "::group::Send event $id"
+            python generator/send_emails.py --event-id "$id" "${ARGS[@]}" || failed=1
+            echo "::endgroup::"
+          done
+          exit $failed
 
       - name: 📊 Print queue summary
-        if: always()
+        if: always() && steps.select.outcome == 'success'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
-          if [ -n "${{ inputs.event_id }}" ]; then
-            python generator/send_emails.py --event-id "${{ inputs.event_id }}" --status
-          else
-            python generator/send_emails.py --all-events --status
-          fi
+          for id in $EVENT_IDS; do
+            python generator/send_emails.py --event-id "$id" --status || true
+          done
 
       - name: 📤 Upload certificates
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: certificates-${{ inputs.event_id || 'all-events' }}-run-${{ github.run_number }}
+          name: certificates-${{ steps.select.outputs.tag || 'none' }}-run-${{ github.run_number }}
           path: output/
           if-no-files-found: warn
           retention-days: 90
@@ -141,7 +197,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: certificate-data-${{ inputs.event_id || 'all-events' }}-run-${{ github.run_number }}
+          name: certificate-data-${{ steps.select.outputs.tag || 'none' }}-run-${{ github.run_number }}
           path: data/
           if-no-files-found: warn
           retention-days: 30
