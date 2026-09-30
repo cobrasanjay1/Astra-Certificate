@@ -16,7 +16,13 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 SITE_DIR = os.path.join(BASE_DIR, "site")
 
 # Template filename (blank version — no sample name/event baked in)
-TEMPLATE_FILE = os.path.join(TEMPLATE_DIR, "astra_certificate_template.webp")
+# Prefer the newly uploaded PNG template. Keep fallbacks for older checkouts.
+_TEMPLATE_CANDIDATES = [
+    os.path.join(TEMPLATE_DIR, os.environ.get("TEMPLATE_FILENAME", "1.png")),
+    os.path.join(TEMPLATE_DIR, "astra_certificate_template.png"),
+    os.path.join(TEMPLATE_DIR, "astra_certificate_template.webp"),
+]
+TEMPLATE_FILE = next((path for path in _TEMPLATE_CANDIDATES if os.path.isfile(path)), _TEMPLATE_CANDIDATES[0])
 
 # ── Template Dimensions ───────────────────────────────────────────────────
 TEMPLATE_WIDTH = 1536
