@@ -119,7 +119,7 @@ Astra-Certificate/
 │   ├── requirements.txt         # Python dependencies
 │   └── fonts/                   # Downloaded Google Fonts
 ├── templates/
-│   └── astra_certificate_template.png
+│   └── astra_certificate_template.webp
 ├── site/                        # Generated verification site
 │   └── index.html               # Landing page
 ├── output/                      # Generated certificates
