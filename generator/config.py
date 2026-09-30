@@ -16,7 +16,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 SITE_DIR = os.path.join(BASE_DIR, "site")
 
 # Template filename (blank version — no sample name/event baked in)
-TEMPLATE_FILE = os.path.join(TEMPLATE_DIR, "astra_certificate_template.png")
+TEMPLATE_FILE = os.path.join(TEMPLATE_DIR, "astra_certificate_template.webp")
 
 # ── Template Dimensions ───────────────────────────────────────────────────
 TEMPLATE_WIDTH = 1536
