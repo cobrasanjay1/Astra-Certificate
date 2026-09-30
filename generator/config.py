@@ -1,7 +1,7 @@
 """
 Configuration for the Astra Certificate Generator.
 
-Text positions are in absolute pixels for a 2000×1414 template.
+Text positions are in absolute pixels for the current 1536×1086 template.
 Adjust these if the template changes.
 """
 
@@ -19,31 +19,31 @@ SITE_DIR = os.path.join(BASE_DIR, "site")
 TEMPLATE_FILE = os.path.join(TEMPLATE_DIR, "astra_certificate_template.png")
 
 # ── Template Dimensions ───────────────────────────────────────────────────
-TEMPLATE_WIDTH = 2000
-TEMPLATE_HEIGHT = 1414
+TEMPLATE_WIDTH = 1536
+TEMPLATE_HEIGHT = 1086
 
 # ── Font Configuration ────────────────────────────────────────────────────
 # Primary fonts from generator/fonts (DroidSerif & CanvaSans)
 FONTS = {
     "name": {
         "path": os.path.join(FONT_DIR, "DroidSerif-Regular.ttf"),
-        "size": 96,  # calibrated to match reference template
+        "size": 74,  # scaled for the 1536×1086 reference template
     },
     "body": {
         "path": os.path.join(FONT_DIR, "CanvaSans-Medium.otf"),
-        "size": 32,  # calibrated: glyph h=25px matching reference
+        "size": 25,  # scaled for the 1536×1086 reference template
     },
     "body_bold": {
         "path": os.path.join(FONT_DIR, "CanvaSans-Bold.otf"),
-        "size": 32,
+        "size": 25,
     },
     "body_italic": {
         "path": os.path.join(FONT_DIR, "CanvaSans-BoldItalic.otf"),
-        "size": 32,
+        "size": 25,
     },
     "label": {
         "path": os.path.join(FONT_DIR, "CanvaSans-Regular.otf"),
-        "size": 20,
+        "size": 15,
     },
 }
 
@@ -87,12 +87,12 @@ TEXT_REGIONS = {
     # Calibrated: DroidSerif size=96 renders "Midlaj Jaleel" at ~568px wide,
     # matching reference x=82..650. Position y=665 → glyph top at ~680 (reference).
     "name": {
-        "cover": (70, 650, 1600, 790),
-        "position": (82, 665),
+        "cover": (54, 499, 1229, 607),
+        "position": (63, 511),
         "color": (30, 30, 30),
         "font_key": "name",
-        "font_size": 96,
-        "max_width": 1500,
+        "font_size": 74,
+        "max_width": 1152,
     },
 
     # Full Body paragraph region (covers and re-types the entire paragraph below the name)
@@ -107,14 +107,14 @@ TEXT_REGIONS = {
     #     (measured 1425-1427px across all 4 full lines).
     # Position y=805 → CanvaSans bbox top-offset=11 → glyph starts at y=816 (reference).
     "body": {
-        "cover": (60, 800, 1700, 1060),
-        "position": (81, 805),
+        "cover": (46, 614, 1306, 814),
+        "position": (62, 618),
         "color": (30, 30, 30),
-        "font_size": 32,
-        "line_height": 51,
-        "tracking": 9.0,
-        "word_space": 22.0,
-        "max_width": 1426,
+        "font_size": 25,
+        "line_height": 39,
+        "tracking": 7.0,
+        "word_space": 17.0,
+        "max_width": 1095,
     },
 
 
