@@ -10,7 +10,7 @@ Database relationships used by the certificate pipeline:
 The certificate data is built from:
     authentication_user.full_name  -> participant name
     authentication_user.email      -> recipient email
-    events_registration.college    -> college entered during registration, reused for every participant in that registration
+    events_registration.college    -> college entered during registration, reused for every participant in that registration, reused for every participant in that registration
     events_event.title             -> event title
     events_registration.status     -> attendance status
 
@@ -336,7 +336,7 @@ def build_event_batches(registrations, users_by_id, events_by_id, participants_b
                         "certificate_sent_at": participant.get("certificate_sent_at"),
                         "full_name": (participant.get(PARTICIPANT_NAME_COL) or "Participant").strip(),
                         "email": (participant.get(PARTICIPANT_EMAIL_COL) or "").strip(),
-                        # College is stored on the registration, not the participant row.\n                        # Team members therefore inherit the college entered for their registration.\n                        # Backward-compatible registration-level college source.\n                    "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+                        # College is stored on the registration, not the participant row.\n                        # Team members therefore inherit the college entered for their registration.\n                        # Backward-compatible registration-level college source.\n                    # Backward-compatible registration-level college source.\n                    "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
                     }
                 )
         else:

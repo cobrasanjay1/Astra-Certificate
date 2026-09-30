@@ -72,7 +72,7 @@ FALLBACK_FONTS = {
 }
 
 
-# ── Text Placement (absolute pixel coordinates on 2000×1414) ──────────────
+# ── Text Placement (absolute pixel coordinates on 1536×1086) ──────────────
 # These coordinates define WHERE dynamic text is rendered on the template.
 #
 # The template has these regions that get COVERED (white rectangle) and
