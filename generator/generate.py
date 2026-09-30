@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     TEMPLATE_FILE, OUTPUT_DIR, DATA_DIR, FONT_DIR, SITE_DIR,
     FONTS, FALLBACK_FONTS, TEXT_REGIONS, BODY_TEMPLATE,
-    TEMPLATE_WIDTH, TEMPLATE_HEIGHT, CERT_ID_PREFIX, safe_id,
+    TEMPLATE_WIDTH, TEMPLATE_HEIGHT, CERT_ID_PREFIX, safe_id, DEFAULT_FEST_NAME,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -205,7 +205,7 @@ def _draw_body(draw, participant, event_info, region):
     # Do not silently substitute KMCT when the DB value is missing.
     college = (participant.get("college") or "N/A").strip().upper()
     event = (event_info.get("title") or "CYPHER DECODE").strip().upper()
-    fest = (event_info.get("fest_name") or "ZERO DAY").strip().upper()
+    fest = (event_info.get("fest_name") or DEFAULT_FEST_NAME).strip().upper()
     date = (participant.get("date") or event_info.get("date_str") or "6 OCTOBER 2026").strip().upper()
 
     body_str = BODY_TEMPLATE.format(
@@ -529,7 +529,7 @@ def generate_test():
     }
     event_info = {
         "title": "CYPHER DECODE",
-        "fest_name": "ZERO DAY",
+        "fest_name": DEFAULT_FEST_NAME,
         "date_str": "6 OCTOBER 2026",
     }
     cert_id = make_cert_id(2026, 9999)
