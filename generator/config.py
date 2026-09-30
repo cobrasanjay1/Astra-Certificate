@@ -20,7 +20,6 @@ SITE_DIR = os.path.join(BASE_DIR, "site")
 _TEMPLATE_CANDIDATES = [
     os.path.join(TEMPLATE_DIR, os.environ.get("TEMPLATE_FILENAME", "1.png")),
     os.path.join(TEMPLATE_DIR, "astra_certificate_template.png"),
-    os.path.join(TEMPLATE_DIR, "astra_certificate_template.webp"),
 ]
 TEMPLATE_FILE = next((path for path in _TEMPLATE_CANDIDATES if os.path.isfile(path)), _TEMPLATE_CANDIDATES[0])
 
