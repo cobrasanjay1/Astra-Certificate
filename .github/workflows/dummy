@@ -1,0 +1,76 @@
+name: 🧪 Dummy Certificate Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Participant name"
+        required: true
+        type: string
+      event_name:
+        description: "Event name"
+        required: true
+        type: string
+      college:
+        description: "College name"
+        required: true
+        type: string
+      send_email:
+        description: "Send the generated certificate by email"
+        required: true
+        default: false
+        type: boolean
+      email:
+        description: "Recipient email (required if send_email is enabled)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate-dummy-certificate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r generator/requirements.txt
+
+      - name: Generate certificate
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          CERT_VERIFY_BASE_URL: ${{ vars.CERT_VERIFY_BASE_URL }}
+          FEST_NAME: ${{ vars.FEST_NAME }}
+          EVENT_DATE_STR: ${{ vars.EVENT_DATE_STR }}
+        run: |
+          ARGS=(
+            --name "${{ inputs.name }}"
+            --event-name "${{ inputs.event_name }}"
+            --college "${{ inputs.college }}"
+          )
+
+          if [ "${{ inputs.send_email }}" = "true" ]; then
+            if [ -z "${{ inputs.email }}" ]; then
+              echo "::error::Email is required when send_email is enabled."
+              exit 1
+            fi
+            ARGS+=(--email "${{ inputs.email }}" --send-email)
+          fi
+
+          python generator/dummy_certificate.py "${ARGS[@]}"
+
+      - name: Upload generated certificate
+        uses: actions/upload-artifact@v4
+        with:
+          name: dummy-certificate
+          path: dummy-output/*.png
+          if-no-files-found: error
