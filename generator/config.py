@@ -87,6 +87,10 @@ FALLBACK_FONTS = {
 #   2. Body paragraph area    — "OF {COLLEGE}, FOR PARTICIPATING IN..."
 #   3. Date area              — "ON {DATE}."
 
+# Right edge of the white "cover" boxes (1536-space). Must stay left of the
+# blue wave design on the right side of the template.
+COVER_RIGHT_EDGE = 1175
+
 TEXT_REGIONS = {
     # Participant Name box & position
     # Calibrated: DroidSerif size=96 renders "Midlaj Jaleel" at ~568px wide,
