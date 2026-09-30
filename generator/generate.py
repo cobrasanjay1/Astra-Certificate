@@ -324,7 +324,7 @@ def generate_certificate(participant, event_info, cert_id):
         scaled["position"] = (round(px * sx), round(py * sy))
         for key in ("font_size", "max_width", "line_height", "tracking", "word_space"):
             if key in region:
-                scaled[key] = region[key] * sf
+                scaled[key] = round(region[key] * sf) if key == "font_size" else region[key] * sf
         return scaled
 
     # Create a drawing overlay (so we can composite with transparency)
