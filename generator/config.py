@@ -92,12 +92,12 @@ TEXT_REGIONS = {
     # Calibrated: DroidSerif size=96 renders "Midlaj Jaleel" at ~568px wide,
     # matching reference x=82..650. Position y=665 → glyph top at ~680 (reference).
     "name": {
-        "cover": (54, 499, 1229, 607),
+        "cover": (54, 499, COVER_RIGHT_EDGE, 607),
         "position": (63, 511),
         "color": (30, 30, 30),
         "font_key": "name",
         "font_size": 74,
-        "max_width": 1152,
+        "max_width": 1100,  # 63 + 1100 = 1163, inside the cover box
     },
 
     # Full Body paragraph region (covers and re-types the entire paragraph below the name)
@@ -112,7 +112,7 @@ TEXT_REGIONS = {
     #     (measured 1425-1427px across all 4 full lines).
     # Position y=805 → CanvaSans bbox top-offset=11 → glyph starts at y=816 (reference).
     "body": {
-        "cover": (46, 614, 1306, 814),
+        "cover": (46, 614, COVER_RIGHT_EDGE, 814),
         "position": (62, 618),
         "color": (30, 30, 30),
         "font_size": 25,
@@ -151,7 +151,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_R
 # The fest date/name are the same across every event in a run, and aren't
 # stored per-registration — set them once here (or via env vars) rather
 # than per participant.
-FEST_NAME = os.environ.get("FEST_NAME", "ZERO DAY")
+# `or` (not a get() default) on purpose: GitHub Actions passes unset repo
+# variables as an EMPTY string, which get(..., default) would not replace.
+DEFAULT_FEST_NAME = "LEVEL 404"
+FEST_NAME = (os.environ.get("FEST_NAME") or "").strip() or DEFAULT_FEST_NAME
 EVENT_DATE_STR = os.environ.get("EVENT_DATE_STR", "")  # e.g. "6 OCTOBER 2026"
 
 
