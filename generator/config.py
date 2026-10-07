@@ -1,8 +1,8 @@
 """
 Configuration for the Astra Certificate Generator.
 
-Text positions are in absolute pixels for the current 1536×1086 template.
-Adjust these if the template changes.
+Text positions are in absolute pixels for the current 2000×1414 template
+(templates/1.png). Adjust these if the template changes.
 """
 
 import os
@@ -24,8 +24,8 @@ _TEMPLATE_CANDIDATES = [
 TEMPLATE_FILE = next((path for path in _TEMPLATE_CANDIDATES if os.path.isfile(path)), _TEMPLATE_CANDIDATES[0])
 
 # ── Template Dimensions ───────────────────────────────────────────────────
-TEMPLATE_WIDTH = 1536
-TEMPLATE_HEIGHT = 1086
+TEMPLATE_WIDTH = 2000
+TEMPLATE_HEIGHT = 1414
 
 # ── Font Configuration ────────────────────────────────────────────────────
 # Primary fonts from generator/fonts (DroidSerif & CanvaSans)
@@ -77,105 +77,69 @@ FALLBACK_FONTS = {
 }
 
 
-# ── Text Placement (absolute pixel coordinates on 1536×1086) ──────────────
-# These coordinates define WHERE dynamic text is rendered on the template.
+# ── Text Placement (absolute pixel coordinates on 2000×1414) ──────────────
+# templates/1.png is a ready-made form: the heading, the "FOR PARTICIPATING
+# IN THE EVENT ‘ ’ ..." paragraph, fest name, date and signatures are all
+# already printed on it. The generator only fills in three things:
 #
-# The template has these regions that get COVERED (white rectangle) and
-# re-drawn with dynamic data:
+#   1. Participant name  — written on the FIRST line under "AWARDED TO"
+#   2. College name      — written on the SECOND line
+#   3. Event name        — written in the blank between the quotes after
+#                          "FOR PARTICIPATING IN THE EVENT"
 #
-#   1. Participant Name area  — large text below "AWARDED TO"
-#   2. Body paragraph area    — "OF {COLLEGE}, FOR PARTICIPATING IN..."
-#   3. Date area              — "ON {DATE}."
-
-# Right edge of the white "cover" boxes (1536-space). Must stay left of the
-# blue wave design on the right side of the template.
-COVER_RIGHT_EDGE = 1175
-
+# Nothing is covered/whited-out any more, so the template artwork (watermark,
+# blue design on the right) stays untouched.
+#
+# "baseline" is the y of the bottom of the capital letters (text is anchored
+# on its baseline, so it sits cleanly on the printed line).
 TEXT_REGIONS = {
-    # Participant Name box & position
-    # Calibrated: DroidSerif size=96 renders "Midlaj Jaleel" at ~568px wide,
-    # matching reference x=82..650. Position y=665 → glyph top at ~680 (reference).
     "name": {
-        "cover": (54, 499, COVER_RIGHT_EDGE, 607),
-        "position": (63, 511),
+        "baseline": (74, 736),
         "color": (30, 30, 30),
         "font_key": "name",
-        "font_size": 74,
-        "max_width": 1100,  # 63 + 1100 = 1163, inside the cover box
+        "font_size": 80,
+        "min_font_size": 36,
+        "max_width": 1440,
     },
-
-    # Full Body paragraph region (covers and re-types the entire paragraph below the name)
-    # Calibrated against the reference template by direct pixel measurement:
-    #   - CanvaSans-Medium size=32 -> cap-height 25px, matching the reference
-    #     ("OCTOBER" glyph bbox is exactly y=1020..1045 in the reference).
-    #   - tracking=9.0, word_space=22.0 -> the unjustified last line
-    #     ("ON 6 OCTOBER 2026.") renders at 477px, matching the reference
-    #     exactly, AND these values reproduce the reference's exact 5-line
-    #     word-wrap grouping (7 / 7 / 11 / 6 / 4 tokens per line).
-    #   - max_width=1426 -> matches the reference's justified line width
-    #     (measured 1425-1427px across all 4 full lines).
-    # Position y=805 → CanvaSans bbox top-offset=11 → glyph starts at y=816 (reference).
-    "body": {
-        "cover": (46, 614, COVER_RIGHT_EDGE, 814),
-        "position": (62, 618),
+    "college": {
+        "baseline": (74, 810),
         "color": (30, 30, 30),
-        "font_size": 25,
-        "line_height": 39,
-        "tracking": 7.0,
-        "word_space": 17.0,
-        "max_width": 1095,
+        "font_key": "name",
+        "font_size": 38,
+        "min_font_size": 22,
+        "max_width": 1440,
+        "uppercase": True,
     },
-
-
+    "event": {
+        "gap": (821, 1096),
+        "baseline_y": 896,
+        "padding": 10,
+        "color": (30, 30, 30),
+        "font_size": 32,
+        "min_font_size": 12,
+        "tracking": 2.0,
+        "uppercase": True,
+    },
 }
-
-# ── Body Paragraph Template ───────────────────────────────────────────────
-# The paragraph below the name. Placeholders are replaced with actual values.
-# Words wrapped in ** are rendered in CanvaSans-BoldItalic (college/event/fest names).
-#
-# Punctuation spacing rule (matches the reference template exactly, including
-# its one inconsistency): punctuation glued directly to a ** boundary with no
-# space (e.g. "**{event}**,") attaches to the neighboring word with no gap
-# ("DECODE,"). Punctuation separated from a ** boundary by a space (e.g.
-# "**{college}** ,") stays a standalone word with normal spacing on both
-# sides ("MANAGEMENT , FOR") — this is exactly how the reference renders it.
-# Do not "fix" that inconsistency; it's what the reference actually shows.
-BODY_TEMPLATE = (
-    "OF **{college}** , FOR PARTICIPATING IN **{event}**, "
-    "HELD AS PART OF THE FEST \u2018**{fest}**\u2019, OF DEPARTMENT OF "
-    "COMPUTER SCIENCE AND ENGINEERING (CYBER SECURITY), "
-    "ON {date}."
-)
-
 
 # ── Database & Supabase Configuration ─────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-
-# The fest date/name are the same across every event in a run, and aren't
-# stored per-registration — set them once here (or via env vars) rather
-# than per participant.
-# `or` (not a get() default) on purpose: GitHub Actions passes unset repo
-# variables as an EMPTY string, which get(..., default) would not replace.
 DEFAULT_FEST_NAME = "LEVEL 404"
 FEST_NAME = (os.environ.get("FEST_NAME") or "").strip() or DEFAULT_FEST_NAME
-EVENT_DATE_STR = os.environ.get("EVENT_DATE_STR", "")  # e.g. "6 OCTOBER 2026"
+EVENT_DATE_STR = os.environ.get("EVENT_DATE_STR", "")
 
 
 def safe_id(value):
-    """Turn an event title into a filesystem-safe identifier used in filenames
-    (data/event_{id}_attendees.json, etc). Used consistently by
-    fetch_attendees.py, generate.py, send_emails.py and build_site.py so a
-    title-based identifier round-trips through every stage of the pipeline."""
+    """Turn an event title into a filesystem-safe identifier used in filenames."""
     return (value or "event").strip().replace("/", "-")
 
 # ── Email Configuration ───────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "ASTRA Events <contact@astraietm.in>")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "ASTRA Events <contact@aietm.in>")
 CERT_VERIFY_BASE_URL = os.environ.get(
     "CERT_VERIFY_BASE_URL", "https://cert.astraietm.in"
 )
 
 # ── Certificate ID Format ─────────────────────────────────────────────────
-# Format: CERT-{YEAR}-{SEQUENTIAL_ID}
 CERT_ID_PREFIX = "CERT"
