@@ -40,8 +40,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("email-queue")
 
-
-# ── Queue Item Statuses ───────────────────────────────────────────────────
 STATUS_PENDING = "PENDING"
 STATUS_SENDING = "SENDING"
 STATUS_SENT = "SENT"
@@ -107,7 +105,6 @@ def _mark_certificate_sent(participant_id=None, registration_id=None):
             f"Could not mark participant {participant_id} as certificate_sent"
         )
 
-    # Backward compatibility for older registrations without participant rows.
     if registration_id:
         response = (
             client.table("events_registration")
@@ -127,8 +124,6 @@ def _mark_certificate_sent(participant_id=None, registration_id=None):
         f"Could not mark certificate sent for participant {participant_id or registration_id}"
     )
 
-
-# ── Email HTML Builder ────────────────────────────────────────────────────
 
 def _build_email_html(participant, event, cert_id):
     """Build the HTML email body for a certificate delivery."""
@@ -197,22 +192,8 @@ def _build_email_html(participant, event, cert_id):
 </html>"""
 
 
-# ── Queue Manager ─────────────────────────────────────────────────────────
-
 class EmailQueue:
-    """
-    Persistent file-based email queue with retry support.
-
-    Queue state is saved to a JSON file after every operation,
-    so it survives crashes, timeouts, and GitHub Action restarts.
-
-    Each item tracks:
-      - status: PENDING / SENDING / SENT / FAILED
-      - attempts: number of send attempts so far
-      - last_error: error message from the most recent failure
-      - sent_at: timestamp of successful send
-      - resend_id: Resend API message ID on success
-    """
+    """Persistent file-based email queue with retry support."""
 
     def __init__(self, queue_file):
         self.queue_file = queue_file
@@ -220,7 +201,6 @@ class EmailQueue:
         self._load()
 
     def _load(self):
-        """Load queue state from disk."""
         if os.path.exists(self.queue_file):
             with open(self.queue_file) as f:
                 data = json.load(f)
@@ -230,7 +210,6 @@ class EmailQueue:
             self.items = []
 
     def _save(self):
-        """Persist queue state to disk (called after every status change)."""
         data = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "summary": self.get_summary(),
@@ -241,11 +220,9 @@ class EmailQueue:
             json.dump(data, f, indent=2)
 
     def add(self, cert_id, email, name, cert_filepath, event, participant, registration_id=None, participant_id=None):
-        """Add an item to the queue (skip if already exists)."""
-        # Check for duplicates by cert_id
         existing = next((i for i in self.items if i["cert_id"] == cert_id), None)
         if existing:
-            return  # Already in queue
+            return
 
         self.items.append({
             "cert_id": cert_id,
@@ -267,19 +244,15 @@ class EmailQueue:
         self._save()
 
     def get_pending(self):
-        """Get all items that need to be sent (PENDING or SENDING)."""
         return [i for i in self.items if i["status"] in (STATUS_PENDING, STATUS_SENDING)]
 
     def get_failed(self):
-        """Get all items that failed and haven't exhausted retries."""
         return [i for i in self.items if i["status"] == STATUS_FAILED and not i.get("max_attempts_reached")]
 
     def get_all_failed(self):
-        """Get ALL failed items, including those with max attempts reached."""
         return [i for i in self.items if i["status"] == STATUS_FAILED]
 
     def mark_sending(self, cert_id):
-        """Mark an item as currently being sent."""
         item = self._find(cert_id)
         if item:
             item["status"] = STATUS_SENDING
@@ -287,7 +260,6 @@ class EmailQueue:
             self._save()
 
     def mark_sent(self, cert_id, resend_id=None):
-        """Mark an item as successfully sent."""
         item = self._find(cert_id)
         if item:
             item["status"] = STATUS_SENT
@@ -297,7 +269,6 @@ class EmailQueue:
             self._save()
 
     def mark_failed(self, cert_id, error, max_retries):
-        """Mark an item as failed, tracking whether retries are exhausted."""
         item = self._find(cert_id)
         if item:
             item["status"] = STATUS_FAILED
@@ -306,7 +277,6 @@ class EmailQueue:
             self._save()
 
     def reset_failed_for_retry(self):
-        """Reset all FAILED items back to PENDING for a retry run."""
         count = 0
         for item in self.items:
             if item["status"] == STATUS_FAILED:
@@ -318,7 +288,6 @@ class EmailQueue:
         return count
 
     def get_summary(self):
-        """Get a summary dict of queue status counts."""
         summary = {STATUS_PENDING: 0, STATUS_SENDING: 0, STATUS_SENT: 0, STATUS_FAILED: 0}
         for item in self.items:
             summary[item["status"]] = summary.get(item["status"], 0) + 1
@@ -329,15 +298,8 @@ class EmailQueue:
         return next((i for i in self.items if i["cert_id"] == cert_id), None)
 
 
-# ── Send Logic with Retries ──────────────────────────────────────────────
-
 def _send_single(item, dry_run=False):
-    """
-    Attempt to send a single certificate email via Resend.
-
-    Returns:
-        (success: bool, resend_id: str|None, error: str|None)
-    """
+    """Attempt to send a single certificate email via Resend."""
     email = item["email"]
     cert_id = item["cert_id"]
     cert_filepath = item["cert_filepath"]
@@ -354,7 +316,6 @@ def _send_single(item, dry_run=False):
         logger.info(f"  🏜️  [DRY RUN] Would send to {email} — {cert_id}")
         return True, "dry-run", None
 
-    # Build payload
     subject = f"🎓 Your Certificate — {event.get('title', 'Event')} · ASTRA IETM"
     html = _build_email_html(participant, event, cert_id)
 
@@ -389,27 +350,12 @@ def _send_single(item, dry_run=False):
 
 
 def _backoff_delay(attempt, base=1.0, max_delay=30.0):
-    """Calculate exponential backoff delay: 1s → 2s → 4s → 8s → ... capped at max_delay."""
     delay = min(base * (2 ** (attempt - 1)), max_delay)
     return delay
 
 
 def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
-    """
-    Process all pending items in the queue with retry logic.
-
-    For each item:
-      1. Mark as SENDING
-      2. Attempt to send
-      3. On success → mark SENT
-      4. On failure → mark FAILED, wait (exponential backoff), retry up to max_retries
-
-    Args:
-        queue: EmailQueue instance
-        max_retries: max send attempts per item
-        delay: base delay between emails (seconds)
-        dry_run: if True, don't actually send
-    """
+    """Process all pending items in the queue with retry logic."""
     pending = queue.get_pending()
     if not pending:
         logger.info("✅ No pending items in queue")
@@ -437,8 +383,6 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                 try:
                     _mark_certificate_sent(item.get("participant_id"), item.get("registration_id"))
                 except Exception as db_error:
-                    # Do not mark the queue item SENT if the DB state was not updated.
-                    # The next run can safely retry it.
                     queue.mark_failed(cert_id, f"DB update failed: {db_error}", max_retries)
                     logger.error(f"  ❌ Email sent, but DB update failed: {db_error}")
                 else:
@@ -448,13 +392,11 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
             queue.mark_failed(cert_id, error, max_retries)
             logger.warning(f"  ❌ Failed: {error}")
 
-            # Retry with backoff if attempts remain
             if item["attempts"] < max_retries:
                 backoff = _backoff_delay(item["attempts"])
                 logger.info(f"  ⏳ Retrying in {backoff:.1f}s...")
                 time.sleep(backoff)
 
-                # Retry loop
                 while item["attempts"] < max_retries:
                     retry_num = item["attempts"] + 1
                     logger.info(f"  🔄 Retry {retry_num}/{max_retries} for {cert_id}")
@@ -468,7 +410,10 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                             logger.info(f"  🧪 Dry run: {cert_id} not written to database")
                         else:
                             try:
-                                _mark_certificate_sent(item.get("registration_id"))
+                                _mark_certificate_sent(
+                                    item.get("participant_id"),
+                                    item.get("registration_id"),
+                                )
                             except Exception as db_error:
                                 queue.mark_failed(
                                     cert_id,
@@ -493,16 +438,13 @@ def process_queue(queue, max_retries=3, delay=0.5, dry_run=False):
                             logger.info(f"  ⏳ Next retry in {backoff:.1f}s...")
                             time.sleep(backoff)
 
-        # Inter-email delay (rate limiting)
         if not dry_run and delay > 0 and idx < total:
             time.sleep(delay)
 
-    # Print final summary
     _print_summary(queue)
 
 
 def _print_summary(queue):
-    """Print a detailed summary of the queue status."""
     summary = queue.get_summary()
     total = summary["total"]
     sent = summary[STATUS_SENT]
@@ -525,22 +467,14 @@ def _print_summary(queue):
                 f"  • {item['cert_id']} → {item['email']} "
                 f"(attempts: {item['attempts']}, error: {item['last_error']})"
             )
-        logger.info(
-            f"\n💡 To retry failed items, run with --retry-failed"
-        )
+        logger.info("\n💡 To retry failed items, run with --retry-failed")
 
     if sent == total:
         logger.info("\n🎉 All certificates sent successfully!")
 
 
-# ── Queue Initialization ─────────────────────────────────────────────────
-
 def init_queue_from_manifest(manifest_path, queue_file):
-    """
-    Load a manifest and create/update the email queue.
-
-    Existing queue items are preserved (won't re-add already SENT items).
-    """
+    """Load a manifest and create/update the email queue."""
     if not os.path.exists(manifest_path):
         logger.error(f"Manifest not found: {manifest_path}")
         sys.exit(1)
@@ -566,26 +500,18 @@ def init_queue_from_manifest(manifest_path, queue_file):
             "college": cert.get("college", ""),
         }
 
-        # In an all-events manifest, each certificate keeps its own
-        # event title/date. Do not use the top-level "All Events" wrapper.
         cert_event = dict(event)
-
-        # The canonical event title comes from events_event using event_id.
-        # The all-events manifest has "All Events" only as a wrapper title.
         event_id = cert.get("event_id")
         db_event = _fetch_event_title_from_db(event_id)
         if db_event:
             cert_event["title"] = db_event["title"]
             cert_event["event_date"] = db_event.get("event_date", "")
         elif cert.get("event"):
-            # Backward-compatible fallback for older manifests.
             cert_event["title"] = cert["event"]
 
         if cert.get("date"):
             cert_event["date_str"] = cert["date"]
 
-        # The database is the source of truth for delivery state.
-        # Sent registrations are not added to the retry queue.
         if cert.get("certificate_sent", False):
             logger.info(
                 "⏭️ Skipping %s: certificate already marked sent in DB",
@@ -614,8 +540,6 @@ def init_queue_from_manifest(manifest_path, queue_file):
     return queue
 
 
-# ── CLI Entry Point ───────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(
         description="Send certificate emails with queue and retry support"
@@ -643,7 +567,6 @@ def main():
     parser.add_argument("--status", action="store_true", help="Show queue status and exit")
     args = parser.parse_args()
 
-    # Determine paths
     if args.event_id and not args.all_events:
         event_id = safe_id(args.event_id)
         manifest_path = os.path.join(DATA_DIR, f"event_{event_id}_manifest.json")
@@ -655,7 +578,6 @@ def main():
         manifest_path = os.path.join(DATA_DIR, "all_manifest.json")
         queue_file = os.path.join(DATA_DIR, "all_queue.json")
 
-    # Status check only
     if args.status:
         if os.path.exists(queue_file):
             queue = EmailQueue(queue_file)
@@ -664,7 +586,6 @@ def main():
             logger.info("No queue file found. Run without --status to initialize.")
         return
 
-    # Validate Resend API key (unless dry run)
     if not args.dry_run and not RESEND_API_KEY:
         logger.error(
             "❌ RESEND_API_KEY not set!\n"
@@ -673,7 +594,6 @@ def main():
         )
         sys.exit(1)
 
-    # Initialize or load the queue
     if args.resume and os.path.exists(queue_file):
         logger.info("🔄 Resuming from existing queue...")
         queue = EmailQueue(queue_file)
@@ -688,7 +608,6 @@ def main():
     if queue is None:
         return
 
-    # Process the queue
     process_queue(
         queue,
         max_retries=args.max_retries,
@@ -699,4 +618,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
