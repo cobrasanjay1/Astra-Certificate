@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import (
     DATA_DIR,
-    EVENT_DATE_STR,
+    event_level_text,
     FEST_NAME,
     SUPABASE_KEY,
     SUPABASE_URL,
@@ -78,6 +78,7 @@ EVENTS_TABLE = "events_event"
 EVENT_ID_COL = "id"
 EVENT_TITLE_COL = "title"
 EVENT_DATE_COL = "event_date"
+EVENT_LEVEL_COL = "event_level"
 
 # Attendance is recorded by changing events_registration.status from
 # REGISTERED to ATTENDED.
@@ -239,7 +240,7 @@ def fetch_events(client, event_ids):
     rows = fetch_rows_by_ids(
         client,
         EVENTS_TABLE,
-        f"{EVENT_ID_COL},{EVENT_TITLE_COL},{EVENT_DATE_COL}",
+        f"{EVENT_ID_COL},{EVENT_TITLE_COL},{EVENT_DATE_COL},{EVENT_LEVEL_COL}",
         EVENT_ID_COL,
         event_ids,
     )
@@ -265,21 +266,20 @@ def fetch_participants(client, registration_ids):
 # ---------------------------------------------------------------------------
 
 def format_event_date(event_date):
-    """Convert the DB timestamp to the certificate's display date."""
+    """Convert the DB timestamp to the certificate's display date (India time)."""
     if not event_date:
-        return EVENT_DATE_STR or ""
+        return ""
 
     try:
-        value = str(event_date).replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(value)
-        return parsed.strftime("%-d %B %Y").upper()
-    except (ValueError, TypeError):
-        # GitHub Ubuntu supports %-d. Fall back for portability.
-        try:
-            parsed = datetime.fromisoformat(str(event_date).replace("Z", "+00:00"))
-            return parsed.strftime("%d %B %Y").lstrip("0").upper()
-        except (ValueError, TypeError):
-            return EVENT_DATE_STR or str(event_date)
+        parsed = datetime.fromisoformat(str(event_date).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            # events_event.event_date is timestamptz (UTC). Convert to IST first so a
+            # midnight-IST event doesn't print as the previous day.
+            from zoneinfo import ZoneInfo
+            parsed = parsed.astimezone(ZoneInfo("Asia/Kolkata"))
+        return f"{parsed.day} {parsed.strftime('%B %Y')}".upper()
+    except (ValueError, TypeError, ImportError):
+        return str(event_date)
 
 
 def get_user_name(user):
@@ -320,6 +320,7 @@ def build_event_batches(registrations, users_by_id, events_by_id, participants_b
                     "fest_name": FEST_NAME,
                     "date_str": format_event_date(event.get(EVENT_DATE_COL)),
                     "event_date": event.get(EVENT_DATE_COL, ""),
+                    "level": event_level_text(event),
                 },
                 "attendees": [],
             },
@@ -469,6 +470,7 @@ def create_sample_data(title=None):
                 "fest_name": FEST_NAME,
                 "date_str": "6 OCTOBER 2026",
                 "event_date": "2026-10-06T00:00:00+00:00",
+                "level": "DISTRICT LEVEL",
             },
             "attendees": [
                 {
@@ -490,8 +492,9 @@ def create_sample_data(title=None):
                 "id": "2",
                 "title": "CODE BREACH",
                 "fest_name": FEST_NAME,
-                "date_str": "6 OCTOBER 2026",
-                "event_date": "2026-10-06T00:00:00+00:00",
+                "date_str": "5 OCTOBER 2026",
+                "event_date": "2026-10-05T00:00:00+00:00",
+                "level": "STATE LEVEL",
             },
             "attendees": [
                 {

@@ -110,24 +110,64 @@ TEXT_REGIONS = {
         "max_width": 1440,
         "uppercase": True,
     },
-    "event": {
-        "gap": (821, 1096),
-        "baseline_y": 896,
-        "padding": 10,
-        "color": (30, 30, 30),
-        "font_size": 32,
-        "min_font_size": 12,
-        "tracking": 2.0,
-        "uppercase": True,
-    },
 }
+
+# ── Certificate paragraph (drawn dynamically) ─────────────────────────────
+# The paragraph is now built from DB values:
+#   FOR PARTICIPATING IN THE <LEVEL> EVENT ‘<EVENT>’, ORGANIZED BY ASTRA
+#   ASSOCIATION PROGRAM ‘LEVEL-404’, OF COMPUTER SCIENCE AND ENGINEERING
+#   (CYBER SECURITY) DEPARTMENT OF KMCT IETM ON <DATE>.
+# Edit PARAGRAPH_PARTS to change the wording. "r" = regular, "b" = bold italic.
+# Placeholders: {level} {event} {fest} {date}
+PARAGRAPH_PARTS = [
+    ("FOR PARTICIPATING IN THE ", "r"),
+    ("{level}", "b"),
+    (" EVENT ", "r"),
+    ("\u2018{event}\u2019", "b"),
+    (", ORGANIZED BY ", "r"),
+    ("ASTRA ASSOCIATION", "b"),
+    (" PROGRAM ", "r"),
+    ("\u2018{fest}\u2019", "b"),
+    (", OF COMPUTER SCIENCE AND ENGINEERING (CYBER SECURITY) DEPARTMENT OF KMCT IETM ON ", "r"),
+    ("{date}", "b"),
+    (".", "r"),
+]
+
+PARAGRAPH = {
+    "x": (69, 1592),                 # left / right edge (justified)
+    "baselines": [897, 943, 989, 1035],  # max 4 lines (signatures sit below)
+    "font_size": 35,
+    "min_font_size": 26,
+    "tracking": 4.0,
+    "color": (30, 30, 30),
+}
+
+# templates/1.png has the old paragraph (blank event, "LEVEL-404", fixed date)
+# baked into the picture. When ERASE_BAKED_PARAGRAPH is on, the generator
+# rebuilds those rows from the watermark pattern before drawing the new text.
+# Set ERASE_BAKED_PARAGRAPH=0 if you switch to a template that is already blank.
+ERASE_BAKED_PARAGRAPH = os.environ.get("ERASE_BAKED_PARAGRAPH", "1") != "0"
+PARAGRAPH_ERASE = {
+    "x": (50, 1600),
+    "y": (858, 1056),
+    "pattern_src_y": 695,   # clean watermark rows used as the source
+    "pattern_period": 50,   # watermark repeats every 50px vertically
+}
+
+# ── Event level ───────────────────────────────────────────────────────────
+# Read from events_event.event_level ("College Level" / "District Level" /
+# "State Level"). Nothing is hardcoded; an empty value is simply left out.
+def event_level_text(event):
+    return " ".join(str((event or {}).get("event_level") or "").split()).upper()
+
 
 # ── Database & Supabase Configuration ─────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
 DEFAULT_FEST_NAME = "LEVEL 404"
 FEST_NAME = (os.environ.get("FEST_NAME") or "").strip() or DEFAULT_FEST_NAME
-EVENT_DATE_STR = os.environ.get("EVENT_DATE_STR", "")
+# Fest label printed inside the certificate paragraph (as it appeared on the old template).
+CERT_FEST_LABEL = (os.environ.get("CERT_FEST_LABEL") or "").strip() or "LEVEL-404"
 
 
 def safe_id(value):
