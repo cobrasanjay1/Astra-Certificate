@@ -116,11 +116,8 @@ jobs:
           EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
           set -e
-          for id in $EVENT_IDS; do
-            echo "::group::Generate event $id"
-            python generator/generate.py --event-id "$id"
-            echo "::endgroup::"
-          done
+          echo "Generating certificates for all selected event data files with globally unique IDs."
+          python generator/generate.py --all-events
 
       - name: 🌐 Build verification site
         if: ${{ !inputs.dry_run }}
