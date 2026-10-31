@@ -78,7 +78,11 @@ def _fetch_event_title_from_db(event_id):
 
 
 def _mark_certificate_sent(participant_id=None, registration_id=None):
-    """Persist successful certificate delivery for the individual recipient."""
+    """Persist successful delivery and sync the parent registration.
+
+    A team registration is marked sent only after every participant row
+    belonging to it has certificate_sent=True.
+    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase credentials")
     if not participant_id and not registration_id:
@@ -87,42 +91,125 @@ def _mark_certificate_sent(participant_id=None, registration_id=None):
     from supabase import create_client
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sent_at = datetime.now(timezone.utc).isoformat()
+
     if participant_id:
+        # Mark this individual recipient as sent. Do not fail merely because
+        # the row was already marked sent by an earlier successful attempt.
         response = (
             client.table("events_registrationparticipant")
             .update({
                 "certificate_sent": True,
-                "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
+                "certificate_sent_at": sent_at,
             })
             .eq("id", participant_id)
-            .eq("certificate_sent", False)
             .select("id, registration_id, certificate_sent, certificate_sent_at")
             .execute()
         )
-        if response.data:
-            return response.data[0]
-        raise RuntimeError(
-            f"Could not mark participant {participant_id} as certificate_sent"
-        )
+
+        participant = response.data[0] if response.data else None
+        if not participant:
+            existing = (
+                client.table("events_registrationparticipant")
+                .select("id, registration_id, certificate_sent, certificate_sent_at")
+                .eq("id", participant_id)
+                .limit(1)
+                .execute()
+            )
+            participant = existing.data[0] if existing.data else None
+
+        if not participant or participant.get("certificate_sent") is not True:
+            raise RuntimeError(
+                f"Could not verify certificate_sent for participant {participant_id}"
+            )
+
+        registration_id = participant.get("registration_id") or registration_id
+        if not registration_id:
+            raise RuntimeError(
+                f"Participant {participant_id} has no registration_id; "
+                "cannot synchronize parent registration"
+            )
 
     if registration_id:
-        response = (
+        # Only mark the team/registration sent when it has at least one
+        # participant and every participant has been marked sent.
+        participants_response = (
+            client.table("events_registrationparticipant")
+            .select("id, certificate_sent, certificate_sent_at")
+            .eq("registration_id", registration_id)
+            .execute()
+        )
+        participants = participants_response.data or []
+
+        if not participants:
+            # Legacy/solo registration without participant rows.
+            if participant_id:
+                raise RuntimeError(
+                    f"No participant rows found for registration {registration_id}"
+                )
+            registration_response = (
+                client.table("events_registration")
+                .update({
+                    "certificate_sent": True,
+                    "certificate_sent_at": sent_at,
+                })
+                .eq("id", registration_id)
+                .select("id, certificate_sent, certificate_sent_at")
+                .execute()
+            )
+            if registration_response.data:
+                return registration_response.data[0]
+            raise RuntimeError(
+                f"Could not mark registration {registration_id} as certificate_sent"
+            )
+
+        all_sent = all(row.get("certificate_sent") is True for row in participants)
+        if not all_sent:
+            logger.info(
+                "Registration %s remains pending: %s/%s participant certificates marked sent",
+                registration_id,
+                sum(1 for row in participants if row.get("certificate_sent") is True),
+                len(participants),
+            )
+            return participant if participant_id else None
+
+        # Use the latest participant timestamp as the parent completion time.
+        participant_timestamps = [
+            row.get("certificate_sent_at")
+            for row in participants
+            if row.get("certificate_sent_at")
+        ]
+        registration_sent_at = max(participant_timestamps) if participant_timestamps else sent_at
+
+        registration_response = (
             client.table("events_registration")
             .update({
                 "certificate_sent": True,
-                "certificate_sent_at": datetime.now(timezone.utc).isoformat(),
+                "certificate_sent_at": registration_sent_at,
             })
             .eq("id", registration_id)
-            .eq("certificate_sent", False)
             .select("id, certificate_sent, certificate_sent_at")
             .execute()
         )
-        if response.data:
-            return response.data[0]
+        if registration_response.data:
+            return registration_response.data[0]
 
-    raise RuntimeError(
-        f"Could not mark certificate sent for participant {participant_id or registration_id}"
-    )
+        # The parent may already be true. Verify before treating this as success.
+        existing_registration = (
+            client.table("events_registration")
+            .select("id, certificate_sent, certificate_sent_at")
+            .eq("id", registration_id)
+            .limit(1)
+            .execute()
+        )
+        if existing_registration.data and existing_registration.data[0].get("certificate_sent") is True:
+            return existing_registration.data[0]
+
+        raise RuntimeError(
+            f"Could not synchronize certificate_sent for registration {registration_id}"
+        )
+
+    raise RuntimeError("Could not determine registration_id for sent certificate")
 
 
 def _build_email_html(participant, event, cert_id):
