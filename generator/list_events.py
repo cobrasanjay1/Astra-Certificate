@@ -212,6 +212,11 @@ def main():
     parser = argparse.ArgumentParser(description="List Astra events / validate an event selection.")
     parser.add_argument("--summary", action="store_true", help="Write the table to the GitHub job summary")
     parser.add_argument(
+        "--refresh-summary",
+        metavar="IDS",
+        help="Refresh final selected-event certificate status from live Supabase data",
+    )
+    parser.add_argument(
         "--select",
         metavar="IDS",
         help="Comma-separated event IDs, or 'all'. Validates the selection and writes outputs.",
@@ -219,6 +224,42 @@ def main():
     args = parser.parse_args()
 
     events = load_events()
+
+    if args.refresh_summary is not None:
+        try:
+            selected_ids = [
+                int(part)
+                for part in re.split(r"[,\\s]+", args.refresh_summary.strip())
+                if part
+            ]
+        except ValueError:
+            logger.error("Invalid event IDs for final summary: %s", args.refresh_summary)
+            sys.exit(1)
+
+        selected_id_set = set(selected_ids)
+        selected_events = [event for event in events if event["id"] in selected_id_set]
+        missing_ids = selected_id_set - {event["id"] for event in selected_events}
+        if missing_ids:
+            logger.error("Could not find event IDs for final summary: %s", sorted(missing_ids))
+            sys.exit(1)
+
+        print("Final certificate status from live Supabase data:")
+        print(render_console(selected_events))
+        totals = {
+            "attended": sum(event["attended"] for event in selected_events),
+            "sent": sum(event["sent"] for event in selected_events),
+            "pending": sum(event["pending"] for event in selected_events),
+        }
+        md = render_markdown(
+            selected_events,
+            heading="Final certificate status (live Supabase data)",
+        )
+        md += (
+            f"| **Total** | | | **{totals['attended']}** | "
+            f"**{totals['sent']}** | **{totals['pending']}** |\n"
+        )
+        append_summary(md)
+        return
 
     if args.select is None:
         print(render_console(events))
