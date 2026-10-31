@@ -58,6 +58,7 @@ USERS_TABLE = "authentication_user"
 USER_ID_COL = "id"
 USER_EMAIL_COL = "email"
 USER_NAME_COL = "full_name"
+USER_COLLEGE_COL = "college"
 
 REGISTRATIONS_TABLE = "events_registration"
 REG_ID_COL = "id"
@@ -72,6 +73,7 @@ PARTICIPANT_ID_COL = "id"
 PARTICIPANT_REG_ID_COL = "registration_id"
 PARTICIPANT_NAME_COL = "name"
 PARTICIPANT_EMAIL_COL = "email"
+PARTICIPANT_COLLEGE_COL = "college"
 PARTICIPANT_LEADER_COL = "is_leader"
 
 EVENTS_TABLE = "events_event"
@@ -224,7 +226,7 @@ def fetch_users(client, user_ids):
     rows = fetch_rows_by_ids(
         client,
         USERS_TABLE,
-        f"{USER_ID_COL},{USER_EMAIL_COL},{USER_NAME_COL},first_name,last_name",
+        f"{USER_ID_COL},{USER_EMAIL_COL},{USER_NAME_COL},{USER_COLLEGE_COL},first_name,last_name",
         USER_ID_COL,
         user_ids,
     )
@@ -255,7 +257,7 @@ def fetch_participants(client, registration_ids):
     return fetch_rows_by_ids(
         client,
         PARTICIPANTS_TABLE,
-        f"{PARTICIPANT_ID_COL},{PARTICIPANT_REG_ID_COL},{PARTICIPANT_NAME_COL},{PARTICIPANT_EMAIL_COL},{PARTICIPANT_LEADER_COL},certificate_sent,certificate_sent_at",
+        f"{PARTICIPANT_ID_COL},{PARTICIPANT_REG_ID_COL},{PARTICIPANT_NAME_COL},{PARTICIPANT_EMAIL_COL},{PARTICIPANT_COLLEGE_COL},{PARTICIPANT_LEADER_COL},certificate_sent,certificate_sent_at",
         PARTICIPANT_REG_ID_COL,
         registration_ids,
     )
@@ -326,9 +328,18 @@ def build_event_batches(registrations, users_by_id, events_by_id, participants_b
             },
         )
 
+        # Prefer the college captured on the registration. Older or partially
+        # populated records can fall back to the participant row, then user profile.
+        registration_college = str(registration.get(REG_COLLEGE_COL) or "").strip()
+        user_college = str(user.get(USER_COLLEGE_COL) or "").strip()
         participant_rows = participants_by_registration.get(registration_id, [])
         if participant_rows:
             for participant in participant_rows:
+                college = (
+                    registration_college
+                    or str(participant.get(PARTICIPANT_COLLEGE_COL) or "").strip()
+                    or user_college
+                )
                 batch["attendees"].append(
                     {
                         "participant_id": participant.get(PARTICIPANT_ID_COL),
@@ -337,7 +348,7 @@ def build_event_batches(registrations, users_by_id, events_by_id, participants_b
                         "certificate_sent_at": participant.get("certificate_sent_at"),
                         "full_name": (participant.get(PARTICIPANT_NAME_COL) or "Participant").strip(),
                         "email": (participant.get(PARTICIPANT_EMAIL_COL) or "").strip(),
-                        # College is stored on the registration, not the participant row.\n                        # Team members therefore inherit the college entered for their registration.\n                        # Backward-compatible registration-level college source.\n                    # Backward-compatible registration-level college source.\n                    "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+                        "college": college,
                     }
                 )
         else:
@@ -351,7 +362,7 @@ def build_event_batches(registrations, users_by_id, events_by_id, participants_b
                     "certificate_sent_at": registration.get("certificate_sent_at"),
                     "full_name": get_user_name(user),
                     "email": (user.get(USER_EMAIL_COL) or "").strip(),
-                    "college": (registration.get(REG_COLLEGE_COL) or "").strip(),
+                    "college": registration_college or user_college,
                 }
             )
 
