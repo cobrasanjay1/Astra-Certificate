@@ -170,14 +170,20 @@ jobs:
           done
           exit $failed
 
-      - name: 📊 Print queue summary
+      - name: 📊 Refresh final certificate summary from Supabase
         if: always() && steps.select.outcome == 'success'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           EVENT_IDS: ${{ steps.select.outputs.ids }}
         run: |
-          for id in $EVENT_IDS; do
+          set -e
+          python generator/list_events.py --refresh-summary "$EVENT_IDS"
+
+      - name: 📋 Print local email queue details
+        if: always() && steps.select.outcome == 'success'
+        run: |
+          for id in ${{ steps.select.outputs.ids }}; do
             python generator/send_emails.py --event-id "$id" --status || true
           done
 
