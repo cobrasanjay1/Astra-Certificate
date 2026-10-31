@@ -229,7 +229,7 @@ def main():
         try:
             selected_ids = [
                 int(part)
-                for part in re.split(r"[,\\s]+", args.refresh_summary.strip())
+                for part in re.split(r"[,\s]+", args.refresh_summary.strip())
                 if part
             ]
         except ValueError:
